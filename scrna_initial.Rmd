@@ -26,19 +26,24 @@ matrix<-params$matrix
 
 ```{r setup, echo=FALSE, warning=FALSE,message=FALSE,results='hide',fig.keep='all'}
 # library(rgl)
-library(knitr)
-library(Seurat)
+library(knitr) #
+library(Seurat) #
 library(dplyr)
-library(Matrix)
-library(scater)
-library(scran)
+library(Matrix) #
+library(scater) #
+library(DropletUtils) #
+library(scran) #
 library(limma)
-library(GSVA)
-library(GSEABase)
-library(genefilter)
-library(org.Hs.eg.db)
-library(gplots)
-library(gdata)
+library(GSVA) #
+library(GSEABase) #
+library(genefilter) #
+library(org.Hs.eg.db) #
+library(gplots) #
+library(gdata) #
+library(RColorBrewer)
+library(scales)
+library(reshape2)
+library(ggplot2)
 
 # knit_hooks$set(rgl = function(before, options, envir) {
 #   if (!before) {
@@ -52,29 +57,39 @@ library(gdata)
 
 #knit_hooks$set(webgl = hook_webgl)
 
-sce <- read10XResults(data_dir = matrix, min_total_cell_counts = 0, min_mean_gene_counts = 0, expand = TRUE)
-
-is.mito <- grepl("^MT-",fData(sce)$symbol)|grepl("^mt-",fData(sce)$symbol)
-sce <- calculateQCMetrics(sce, feature_controls=list(Mt=is.mito))
-libsize.drop <- isOutlier(sce$total_counts, nmads=3, type="lower", log=TRUE)
-feature.drop <- isOutlier(sce$total_features, nmads=3, type="lower", log=TRUE)
-mito.drop <- isOutlier(sce$pct_counts_feature_controls_Mt, nmads=3, type="higher")
-sce$keep <- !(libsize.drop | feature.drop | mito.drop)
-sce_filtered <- sce[,!(libsize.drop | feature.drop | mito.drop)]
-numcells <- nexprs(sce_filtered, byrow=TRUE)
+sce <- read10xCounts(matrix)
+numcells <- nexprs(sce, byrow=TRUE)
 keepgenes <- numcells >= round(0.001*ncol(sce))
-sce_filtered <- sce_filtered[keepgenes,]
+sce <- sce[keepgenes,]
 numdroppedgenes <- sum(!keepgenes)
 totalgenes <- length(keepgenes)
-keepcells <- rownames(sce_filtered@phenoData)
-droppedcells <- setdiff(rownames(sce@phenoData),keepcells)
+is.mito <- grepl("^MT-",rowData(sce)@listData$Symbol)|grepl("^mt-",rowData(sce)@listData$Symbol)|grepl("^Mt-",rowData(sce)@listData$Symbol)
+sce <- calculateQCMetrics(sce, feature_controls=list(Mt=is.mito))
+libsize.drop <- isOutlier(sce$total_counts, nmads=3, type="lower", log=TRUE)
+feature.drop <- isOutlier(sce$total_features_by_counts, nmads=3, type="lower", log=TRUE)
+mito.drop <- isOutlier(sce$pct_counts_Mt, nmads=3, type="higher")
+sce$keep <- !(libsize.drop | feature.drop | mito.drop)
+sce_filtered <- sce[,!(libsize.drop | feature.drop | mito.drop)]
+keepcells <- sce_filtered@colData$Barcode
+droppedcells <- setdiff(sce@colData$Barcode,keepcells)
+if (all(grepl(pattern = "\\-1$", x = keepcells))) {
+	keepcells <- as.vector(x = as.character(x = sapply(X = keepcells, FUN = ExtractField, field = 1, delim = "-")))
+}
 
 so.data <- Read10X(matrix)
-so <- new("seurat", raw.data=so.data)
-so <- Setup(so, min.genes=0, min.cells=0, do.logNormalize=F, do.scale=F, do.center=F, project=projectId)
+so <- CreateSeuratObject(so.data, min.genes = 0, min.cells=round(0.001*ncol(sce)), project=projectId)
+# so@raw.data <- so@data
+# so <- Setup(so, min.genes=0, min.cells=round(0.001*ncol(sce)), do.logNormalize=T, do.scale=F, do.center=F, total.expr=1e4, project=projectId, save.raw=F)
+```
+
+### **nGenes vs nUMI** (Pre-Filter)
+
+```{r nUMI_plot, echo=FALSE, message=FALSE, warning=FALSE}
+#xthresh = median(so@data.info$nUMI)+3*stats::mad(so@data.info$nUMI)
+#ythresh = median(so@data.info$nGene)+3*stats::mad(so@data.info$nGene)
+GenePlot(so, "nUMI", "nGene")
 so <- SubsetData(so, cells.use=keepcells)
-so@raw.data <- so@data
-so <- Setup(so, min.genes=0, min.cells=round(0.001*ncol(sce)), do.logNormalize=T, do.scale=F, do.center=F, total.expr=1e4, project=projectId, save.raw=F)
+so <- NormalizeData(so, normalization.method="LogNormalize", scale.factor = 10000)
 ```
 
 ### **Pre-Filter Histograms**
@@ -87,52 +102,40 @@ plot(density(sce$total_counts),col="red", xlab="Library size", main="")
 ```
 ```{r histograms_2, echo=FALSE,warning=FALSE,message=FALSE}
 par(mfrow=c(1,2))
-hist(sce$total_features, xlab="Number of expressed genes", main="", 
+hist(sce$total_features_by_counts, xlab="Number of expressed genes", main="", 
     breaks=20, col="grey80", ylab="Number of cells")
-plot(density(sce$total_features),col="red", xlab="Number of expressed genes", main="")
+plot(density(sce$total_features_by_counts),col="red", xlab="Number of expressed genes", main="")
 ```
 ```{r histograms_3, echo=FALSE,warning=FALSE,message=FALSE}
 par(mfrow=c(1,2))
-hist(sce$pct_counts_feature_controls_Mt, xlab="Mitochondrial proportion (%)", 
+hist(sce$pct_counts_Mt, xlab="Mitochondrial proportion (%)", 
     ylab="Number of cells", breaks=20, main="", col="grey80")
-plot(density(sce$pct_counts_feature_controls_Mt),col="red", xlab="Mitochondrial proportion (%)", main="")
+plot(density(sce$pct_counts_Mt),col="red", xlab="Mitochondrial proportion (%)", main="")
 ```
 
-### **Removed** `r numdroppedgenes` **lowly represented genes from count matrix from** `r totalgenes` **inital total genes.**  
+### **Removed** `r numdroppedgenes` **genes with expression in less than 0.1% of all cells from** `r totalgenes` **inital total genes. Downstream analysis uses the remaining** `r totalgenes-numdroppedgenes` **genes.**
 
-### **Removed the following** `r length(droppedcells)` **barcoded cells as poor quality:**  
+### **Removed the following** `r length(droppedcells)` **barcoded cells as poor quality. Downstream analysis uses the remaining** `r length(keepcells)` **cells.**
 
 
 ```{r filter_metrics, echo=FALSE, message=FALSE, warning=FALSE, results='asis'}
 kable(data.frame(ByLibSize=sum(libsize.drop), ByFeature=sum(feature.drop), ByMito=sum(mito.drop), Remaining=ncol(sce_filtered)))
 cat("  \n")
-cat(unlist(droppedcells))
-cat("  \n")
+#cat(unlist(droppedcells))
+#cat("  \n")
 ```
 
-### **QC PCA to Visualize Dropped Cells**
+### **PCA highlighting poor quality cells that are dropped for downstream analysis**
 
 ```{r qc_pca, echo=FALSE,warning=FALSE,message=FALSE}
-sce$keep_by_defaults <- (
-    # remove cells with unusual numbers of genes
-    !sce$filter_on_total_features &
-    # remove cells with unusual numbers molecules counted
-    !sce$filter_on_total_counts &
-    # < 80% mitochondrial
-    !sce$filter_on_pct_counts_feature_controls_Mt &
-    # controls shouldn't be used in downstream analysis
-    !sce$is_cell_control
-)
+sce <- scater::normalize(sce)
+sce <- scater::runPCA(sce)
 scater::plotPCA(sce,
-                size_by = "total_features", 
-                colour_by = "keep",
-                shape_by = "keep_by_defaults",
-                pca_data_input = "pdata",
-                detect_outliers = FALSE,
-                return_SCESet = FALSE)
+                size_by = "total_features_by_counts", 
+                colour_by = "keep")
+sce_filtered <- scater::normalize(sce_filtered)
+sce_filtered <- runPCA(sce_filtered)
 sce<-sce_filtered
-is.mito <- grepl("^MT-",fData(sce)$symbol)|grepl("^mt-",fData(sce)$symbol)
-sce <- calculateQCMetrics(sce, feature_controls=list(Mt=is.mito))
 ```
 
 ### **Post-Filter Histograms**
@@ -145,36 +148,18 @@ plot(density(sce$total_counts),col="red", xlab="Library size", main="")
 ```
 ```{r histograms_5, echo=FALSE,warning=FALSE,message=FALSE}
 par(mfrow=c(1,2))
-hist(sce$total_features, xlab="Number of expressed genes", main="", 
+hist(sce$total_features_by_counts, xlab="Number of expressed genes", main="", 
     breaks=20, col="grey80", ylab="Number of cells")
-plot(density(sce$total_features),col="red", xlab="Number of expressed genes", main="")
+plot(density(sce$total_features_by_counts),col="red", xlab="Number of expressed genes", main="")
 ```
 ```{r histograms_6, echo=FALSE,warning=FALSE,message=FALSE}
 par(mfrow=c(1,2))
-hist(sce$pct_counts_feature_controls_Mt, xlab="Mitochondrial proportion (%)", 
+hist(sce$pct_counts_Mt, xlab="Mitochondrial proportion (%)", 
     ylab="Number of cells", breaks=20, main="", col="grey80")
-plot(density(sce$pct_counts_feature_controls_Mt),col="red", xlab="Mitochondrial proportion (%)", main="")
+plot(density(sce$pct_counts_Mt),col="red", xlab="Mitochondrial proportion (%)", main="")
 ```
 
-```{r rle_plot, echo=FALSE,message=FALSE,warning=FALSE,results='hide',fig.keep='all'}
-### **Relative Log Expression (Before and After CPM Normalization)
-
-#set_exprs(sce, "log2_counts") <- log2(counts(sce)+sce@logExprsOffset)
-#qclust <- quickCluster(sce, min.size = 30)
-#sce <- computeSumFactors(sce, sizes = 15, clusters = qclust)
-#sce <- normalize(sce)
-#plotRLE(sce,exprs_mats=list(Raw="log2_counts",CPM="exprs"),exprs_logged=c(TRUE,TRUE))
-```
-
-### **nGenes vs nUMI** (Useful for outlier detection)
-
-```{r nUMI_plot, echo=FALSE, message=FALSE, warning=FALSE}
-#xthresh = median(so@data.info$nUMI)+3*stats::mad(so@data.info$nUMI)
-#ythresh = median(so@data.info$nGene)+3*stats::mad(so@data.info$nGene)
-GenePlot(so, "nUMI", "nGene")
-```
-
-### **Cell Cycle Stage**
+### **Cell Cycle Phase**
 
 ```{r cell_cycle, echo=FALSE,warning=FALSE,message=FALSE}
 if(grepl("hg",species)|grepl("mm",species)){
@@ -190,7 +175,7 @@ if(grepl("hg",species)|grepl("mm",species)){
   abline(h=0.5,col="red")
   abline(v=0.5,col="red")
   legend("topleft", paste0("[G2/M] ",length(which(assignments$score$G2M >= 0.5))), bty="n", text.col="red")
-  legend("topright", paste0("[?] ",length(which(assignments$score$G1 >= 0.5 & assignments$score$G2M >= 0.5))), bty="n", text.col="red")
+  legend("topright", paste0("[Unknown] ",length(which(assignments$score$G1 >= 0.5 & assignments$score$G2M >= 0.5))), bty="n", text.col="red")
   legend("bottomleft", paste0("[S] ",length(which(assignments$score$G1 < 0.5 & assignments$score$G2M < 0.5))), bty="n", text.col="red")
   legend("bottomright", paste0("[G1] ",length(which(assignments$score$G1 >= 0.5))), bty="n", text.col="red")
 }
@@ -198,14 +183,14 @@ sce$G1score <- assignments$score$G1
 sce$G2Mscore <- assignments$score$G2M
 ```
 
-### **PCA 1:2 Before Regressing Cell Cycle Stage**
+### **PCA 1:2 Before Regressing Cell Cycle Phase**
 
 ```{r regress_confounding, echo=FALSE,warning=FALSE,message=FALSE,message=FALSE,results='hide',fig.keep='all'}
-norm_exprs(sce) <- removeBatchEffect(exprs(sce), covariates=data.frame(assignments$score[,c("G1", "G2M")],percent.mito=sce$pct_counts_feature_controls_Mt,nUMI=so@data.info$nUMI))
+#norm_exprs(sce) <- removeBatchEffect(exprs(sce), covariates=data.frame(assignments$score[,c("G1", "G2M")],percent.mito=sce$pct_counts_Mt,nUMI=so@data.info$nUMI))
 stage <- c()
 for(i in 1:length(sce$G1score)){
   if(sce$G1score[i] >= 0.5 & sce$G2Mscore[i] >= 0.5){
-    stage[i] <- "???"
+    stage[i] <- "Unknown"
   }else if(sce$G1score[i] >= 0.5){
     stage[i] <- "G1"
   }else if(sce$G2Mscore[i] >= 0.5){
@@ -214,11 +199,11 @@ for(i in 1:length(sce$G1score)){
     stage[i] <- "S"
   }
 }
-metadata <- data.frame(percent.mito=sce$pct_counts_feature_controls_Mt,G1.score=sce$G1score,G2M.score=sce$G2Mscore,stage=stage,row.names=colnames(sce))
+metadata <- data.frame(percent.mito=sce$pct_counts_Mt,G1.score=sce$G1score,G2M.score=sce$G2Mscore,stage=stage,row.names=keepcells)
 so <- AddMetaData(so, metadata)
-so_temp <- RegressOut(so, latent.vars = c("nUMI", "percent.mito"))
-so_temp <- MeanVarPlot(so_temp ,fxn.x = expMean, fxn.y = logVarDivMean, x.low.cutoff = 0.0125, x.high.cutoff = 3, y.cutoff = 0.5, do.contour = F, do.plot=F)
-so_temp <- PCA(so_temp, pc.genes = so_temp@var.genes, do.print = FALSE)
+so <- FindVariableGenes(so, mean.function = ExpMean, dispersion.function = LogVMR, x.low.cutoff = 0.0125, x.high.cutoff = 3, y.cutoff = 0.5, do.plot=F)
+so_temp <- ScaleData(object = so, vars.to.regress = c("nUMI", "percent.mito"))
+so_temp <- RunPCA(so_temp, pc.genes = so_temp@var.genes, do.print = FALSE)
 #so_temp <- ProjectPCA(so_temp,do.print=F)
 PCAPlot(so_temp, 1, 2, group.by="stage",cols.use=c(rgb(1, 0, 0, 0.7),rgb(0, 1, 0, 0.3),rgb(0, 0, 1, 0.7),rgb(0, 0, 0, 0.7)))
 ```
@@ -226,9 +211,8 @@ PCAPlot(so_temp, 1, 2, group.by="stage",cols.use=c(rgb(1, 0, 0, 0.7),rgb(0, 1, 0
 ### **PCA 1:2 After Regressing by G1/G2M Scores**
 
 ```{r regress_confounding_final, echo=FALSE,warning=FALSE,message=FALSE,message=FALSE,results='hide',fig.keep='all'}
-so <- RegressOut(so, latent.vars = c("nUMI", "percent.mito", "G1.score", "G2M.score"))
-so <- MeanVarPlot(so ,fxn.x = expMean, fxn.y = logVarDivMean, x.low.cutoff = 0.0125, x.high.cutoff = 3, y.cutoff = 0.5, do.contour = F, do.plot=F)
-so <- PCA(so, pc.genes = so@var.genes, do.print = FALSE)
+so <- ScaleData(object = so, vars.to.regress = c("nUMI", "percent.mito", "G1.score", "G2M.score"))
+so <- RunPCA(so, pc.genes = so@var.genes, do.print = FALSE)
 #so <- ProjectPCA(so,do.print=F)
 PCAPlot(so, 1, 2, group.by="stage",cols.use=c(rgb(1, 0, 0, 0.7),rgb(0, 1, 0, 0.3),rgb(0, 0, 1, 0.7),rgb(0, 0, 0, 0.7)))
 ```
@@ -237,27 +221,91 @@ PCAPlot(so, 1, 2, group.by="stage",cols.use=c(rgb(1, 0, 0, 0.7),rgb(0, 1, 0, 0.3
 
 ```{r highestexpression, echo=FALSE,warning=FALSE,message=FALSE}
 fontsize <- theme(axis.text=element_text(size=12), axis.title=element_text(size=16))
-make.names(featureData(sce)$symbol,unique=TRUE)->featureNames(sce)
-plotQC(sce, type = "highest-expression", n=50) + fontsize
-featureData(sce)$id->featureNames(sce)
-```
-
-### **scater PC Metrics**
-
-```{r findpcs, echo=FALSE,warning=FALSE,message=FALSE}
-plotQC(sce, type = "find-pcs") + fontsize
+make.names(rowData(sce)$Symbol,unique=TRUE)->rownames(sce)
+plotQC(sce, type = "highest-expression", n=20) + fontsize
+rowData(sce)$ID->rownames(sce)
 ```
 
 ### **Seurat MeanVar Plot**
 
 ```{r Seurat_meanvar, echo=FALSE,warning=FALSE,message=FALSE,results='hide',fig.keep='all'}
-MeanVarPlot(so ,fxn.x = expMean, fxn.y = logVarDivMean, x.low.cutoff = 0.0125, x.high.cutoff = 3, y.cutoff = 0.5, do.contour = F)
+so <- FindVariableGenes(so, mean.function = ExpMean, dispersion.function = LogVMR, x.low.cutoff = 0.0125, x.high.cutoff = 3, y.cutoff = 0.5)
 ```
+
+### **PCA 1:2 QC**
+```{r Seurat_pcqc, echo=FALSE,warning=FALSE,message=FALSE,results='hide',fig.keep='all'}
+#Lab.palette <- colorRampPalette(brewer.pal(8,"Set1"))
+#Lab.palette <- colorRampPalette(brewer.pal(8,"Set3"))
+Lab.palette <- colorRampPalette(brewer.pal(8,"Set2"))
+#Lab.palette <- colorRampPalette(brewer.pal(8,"Accent"))
+#Lab.palette <- colorRampPalette(c(rgb(50,50,50,1), rgb(,0,0,0)), alpha = TRUE)
+#pie(rep(1,12),col=Lab.palette(12))
+
+draw.PCA.clus <- function(obj,colnum,m){
+  objname=obj@project.name
+  clusmat=data.frame(pc1=obj@dr$pca@cell.embeddings[,1],pc2=obj@dr$pca@cell.embeddings[,2],
+            clusid=as.character(obj@meta.data[[m]]))
+  title=as.character(m)
+  cols=list()
+  n=length(unique((obj@meta.data[[m]])))
+  cols[[1]]=brewer.pal(8, "Set3")[-2]  #Alternative
+  cols[[2]]=brewer.pal(8, "Set1")[-6]
+  cols[[3]]=c(brewer.pal(8,"Set2"),cols[[2]][-2])
+  cols[[4]]=c("#F8766D","#FF9912","#a100ff","#00BA38","#619CFF","#FF1493","#010407")
+  cols[[5]]=c("blue","red","grey")
+  cols[[6]]=Lab.palette(n)
+  ggplot(clusmat, aes(x=pc1, y=pc2)) +
+    theme_bw() +
+    theme(legend.title=element_blank()) +
+    geom_point(aes(colour=clusid),size=0.5) +
+    scale_color_manual(values=cols[[colnum]]) +
+    xlab("pc1") + ylab("pc2") +
+    ggtitle(title)
+  # z=ifelse (any(SO@calc.params$ScaleData$vars.to.regress %in% 
+  #                 c("S.Score","G2M.Score","Prolif.Score")),
+  #           paste0("graphics/",objname,"/",m,".pca",".png"),
+  #           paste0("graphics/",objname,"/",m,".pca.nr",".png"))
+  # ggsave(z, width = 8, height = 5)
+}
+
+draw.PCA <- function(obj,colnum,m){
+  objname=obj@project.name
+  clusmat=data.frame(pc1=obj@dr$pca@cell.embeddings[,1],
+                     pc2=obj@dr$pca@cell.embeddings[,2],
+                     clusid=obj@meta.data[[m]])
+  title=as.character(m)
+  cols=list()
+  mid=median(obj@meta.data[[m]])
+  ggplot(clusmat, aes(x=pc1, y=pc2)) +
+    theme_bw() +
+    theme(legend.title=element_blank()) +
+    geom_point(aes(colour=clusid),size=0.5) +
+    scale_color_gradient2(low = muted("blue4"), mid = "white", high = "red",
+                          midpoint = mid) + 
+    xlab("pc1") + ylab("pc2") +
+    ggtitle(title)
+  # z=ifelse (any(SO@calc.params$ScaleData$vars.to.regress %in% 
+  #                 c("S.Score","G2M.Score","Prolif.Score")),
+  #           paste0("graphics/",objname,"/",m,".pca",".png"),
+  #           paste0("graphics/",objname,"/",m,".pca.nr",".png"))
+  # ggsave(z, width = 8, height = 5)
+}
+
+draw.PCA.clus(so,colnum=3,m = "orig.ident")
+draw.PCA.clus(so,colnum=3,m = "stage")
+draw.PCA(so,colnum=3,m = "percent.mito")
+draw.PCA(so,colnum=3,m = "G1.score")
+draw.PCA(so,colnum=3,m = "G2M.score")
+draw.PCA(so,colnum=3,m = "nGene")
+draw.PCA(so,colnum=3,m = "nUMI")
+
+```
+
 
 ### **Seurat PCA Genes**
 
 ```{r Seurat_vizpca, echo=FALSE,warning=FALSE,message=FALSE,results='hide',fig.keep='all',fig.height=70}
-VizPCA(so, 1:20, nCol=2)
+VizPCA(so, 1:20, nCol=2) #change PCs from 1:20 to fewer for command line plotting
 ```
 
 ### **Seurat PC Heatmaps**
@@ -315,9 +363,16 @@ if(grepl("hg",species)|grepl("mm",species)){
   if(grepl("mm",species)){
     gsets <- getGmt("/data/CCBR_Pipeliner/db/PipeDB/MSigDB/c2.cp.kegg.v6.0.symbols_mouse.gmt")
   }
-  scores <- gsva(exprs(eset_filtered),gsets,min.sz=10,max.sz=500,verbose=TRUE)
+  scores <- gsva(exprs(eset_filtered),gsets,min.sz=5,max.sz=500,verbose=TRUE)
   myscores <- scores$es.obs[unlist(lapply(rownames(scores$es.obs),function(x){grepl("^REACTOME_",x)|grepl("^KEGG_",x)|grepl("^BIOCARTA_",x)})),]
   top <- myscores[names(head(rev(sort((rowSds(myscores)))),50)),]
   heatmap.2(top,trace="none",labRow=NULL,margins=c(1,20),cexRow=0.7)
 }
+
+#ignore this:
+#pc1.scores <- gsva(pc1.exprs,gsets,min.sz=2,verbose=TRUE)
+#pc1.cells <- unname(so@dr$pca@cell.embeddings[,1])
+#col <- ifelse(pc1.cells<0,"blue","red")
+#heatmap.2(pc1.scores,trace="none",labRow=NULL,margins=c(1,20),cexRow=0.7,ColSideColors=col)
 ```
+

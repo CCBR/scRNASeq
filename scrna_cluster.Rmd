@@ -34,15 +34,18 @@ library(Seurat)
 library(dplyr)
 library(Matrix)
 library(methods)
+library(igraph)
+library(TSCAN)
 so <- readRDS(so_save)
 ```
 
 ### **tSNE**
 
 ```{r Seurat_tsne, echo=FALSE,warning=FALSE,message=FALSE}
-so <- FindClusters(so, pc.use = 1:pcs, resolution = res, print.output = 0, save.SNN = T, random.seed=1234567, temp.file.location=getwd())
+so <- FindClusters(so, reduction.type = "pca", dims.use = 1:pcs, resolution = res, print.output = 0, save.SNN = T, random.seed=1234567, temp.file.location=getwd())
 so <- RunTSNE(so, dims.use = 1:pcs, do.fast = T)
-TSNEPlot(so,do.label=T)
+TSNEPlot(so,do.label=T,do.return = T)
+tsplot <- TSNEPlot(so,do.label=T,do.return = T)
 saveRDS(so, "seurat_object.rds")
 ```
 
@@ -57,9 +60,62 @@ for(i in 1:nclusts){
 }
 ```
 
+### **Top 10 Cluster Marker Heatmap**
+```{r markerheatmap, echo=FALSE,warning=FALSE,message=FALSE}
+so.markers <- FindAllMarkers(object = so, only.pos = TRUE, min.pct = 0.25, thresh.use = 0.25)
+top10 <- so.markers %>% group_by(cluster) %>% top_n(10, avg_logFC)
+DoHeatmap(object = so, genes.use = top10$gene, slim.col.label = TRUE, remove.key = TRUE)
+```
+
 ### **Gene Lists**
 
 ```{r Seurat_genes_table, echo=FALSE,warning=FALSE,message=FALSE,results='asis'}
 tables
 ```
 
+### **TSCAN Pseudotime Analysis**
+
+```{r tscan, echo=FALSE,warning=FALSE,message=FALSE}
+# pca.clus=data.frame(clusid=so@ident,so@dr$pca@cell.embeddings[,1:pcs])
+# meanPC = pca.clus %>% group_by(clusid) %>% summarise_all(funs(mean)) 
+# datclust=vector("list",4)
+# names(datclust) = c("pcareduceres","MSTtree","clusterid","clucenter")  
+# clucenter=as.matrix(meanPC[,-1])
+# rownames(clucenter)=seq(1,dim(clucenter)[1],1)
+# dp <- as.matrix(dist(clucenter))
+# gp <- graph.adjacency(dp, mode = "undirected", weighted = TRUE)
+# dp_mst <- minimum.spanning.tree(gp)
+
+# datclust$pcareduceres=as.matrix(pca.clus[,-1])
+# rownames(datclust$pcareduceres)=seq(nrow(datclust$pcareduceres))
+# datclust$MSTtree=dp_mst
+# datclust$clusterid=as.integer(so@ident)
+# names(datclust$clusterid) = seq(length(datclust$clusterid))
+# clucenter=as.matrix(meanPC[,-1])
+# datclust$clucenter=as.matrix(clucenter)
+# rownames(datclust$clucenter)=NULL
+# colnames(datclust$clucenter)=NULL
+# datorderTSCAN <- TSCAN::TSCANorder(datclust, orderonly = F, listbranch = T)
+
+# draw.tSNE.time <- function(obj,p1,pt,num){
+#   objname=obj@project.name
+#   dtime.df=data.frame(samp=pt[[num]]$sample_name,
+#                       time=pt[[num]]$Pseudotime)
+#   clusmat=data.frame(tsne1=p1$data$tSNE_1,
+#                      tsne2=p1$data$tSNE_2)
+#   rownames(clusmat)=seq(nrow(clusmat))
+#   clusmat$time=0
+#   clusmat$time=dtime.df$time[match(rownames(clusmat),as.character(dtime.df$samp))]
+#   ggplot(clusmat, aes(x=tsne1, y=tsne2)) +
+#     theme_bw() +
+#     theme(legend.title=element_blank()) +
+#     geom_point(aes(colour=time),size=0.5) +
+#     scale_color_gradient(low = "grey", high = "blue") +
+#     ggtitle(names(pt)[[num]]) +
+#     xlab("tsne-1") + ylab("tsne-2")
+# }
+
+# for (i in 1:length(datorderTSCAN)){
+#   print(draw.tSNE.time(so,tsplot,datorderTSCAN,i))
+# }
+```
