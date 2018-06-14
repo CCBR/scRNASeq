@@ -46,7 +46,7 @@ so <- FindClusters(so, reduction.type = "pca", dims.use = 1:pcs, resolution = re
 so <- RunTSNE(so, dims.use = 1:pcs, do.fast = T)
 TSNEPlot(so,do.label=T,do.return = T)
 tsplot <- TSNEPlot(so,do.label=T,do.return = T)
-saveRDS(so, "seurat_object.rds")
+saveRDS(so, paste0(projectId,"_cluster_seurat_object.rds"))
 ```
 
 ```{r Seurat_genes, echo=FALSE,warning=FALSE,message=FALSE,results='hide'}
@@ -56,7 +56,8 @@ tables <- htmltools::tagList()
 for(i in 1:nclusts){
 	glist[[i]]<-FindMarkers(so,ident.1=i-1,min.pct=0.25)
 	tables[[i]] <- DT::datatable(glist[[i]][1:100,], caption=htmltools::tags$caption(paste0("Top 100 gene markers for cluster #",(i-1)) ,style="color:red; font-size: 12px" ),rownames=T)
-	write.table(glist[[i]],file=paste0("Seurat_",pcs,"_",res,"_cluster_",(i-1),".txt"),sep="\t",quote=F)
+	write.table(glist[[i]],file=paste0(projectId,"_seurat_",pcs,"_",res,"_cluster_",(i-1),".txt")
+	            ,sep="\t",quote=F)
 }
 ```
 

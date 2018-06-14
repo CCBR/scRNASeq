@@ -4,6 +4,7 @@ author: "CCBR scRNAseq pipeline"
 output: html_document
 params:
   matrix: "path/to/count/matrix"
+  mattype: "cellranger"
   species: "hg19"
   projectId: "<projectId>"
   projectDesc: "<desc>"
@@ -15,6 +16,7 @@ projectDesc<-params$projectDesc
 dateandtime<-format(Sys.time(), "%a %b %d %Y - %X")
 species<-params$species
 matrix<-params$matrix
+mattype <- params$mattype
 ```
 
 ### **Project:**
@@ -37,6 +39,8 @@ library(limma)
 library(GSVA) #
 library(GSEABase) #
 library(genefilter) #
+library(AnnotationDbi)
+library(org.Mm.eg.db)
 library(org.Hs.eg.db) #
 library(gplots) #
 library(gdata) #
@@ -57,9 +61,21 @@ library(ggplot2)
 
 #knit_hooks$set(webgl = hook_webgl)
 
-sce <- read10xCounts(matrix)
+if(mattype=="cellranger"){
+  sce <- read10xCounts(matrix)
+}else if(mattype=="biorad"){
+  counts.table <- read.delim(matrix, stringsAsFactors = F, header = TRUE, sep=",", row.names=1)
+  counts.matrix <- t(as.matrix(counts.table))
+  sce <- SingleCellExperiment(list(counts=counts.matrix))
+  isSpike(sce, "MySpike") <- grep("^ERCC", rownames(sce))
+  sce@colData$Barcode <- colnames(sce)
+  rowData(sce)$Symbol <- rownames(sce)
+}else{
+  stop("Input type not recognized!")
+}
+
 numcells <- nexprs(sce, byrow=TRUE)
-keepgenes <- numcells >= round(0.001*ncol(sce))
+keepgenes <- numcells >= ifelse(round(0.001*ncol(sce))!=0,round(0.001*ncol(sce)),1)
 sce <- sce[keepgenes,]
 numdroppedgenes <- sum(!keepgenes)
 totalgenes <- length(keepgenes)
@@ -68,6 +84,8 @@ sce <- calculateQCMetrics(sce, feature_controls=list(Mt=is.mito))
 libsize.drop <- isOutlier(sce$total_counts, nmads=3, type="lower", log=TRUE)
 feature.drop <- isOutlier(sce$total_features_by_counts, nmads=3, type="lower", log=TRUE)
 mito.drop <- isOutlier(sce$pct_counts_Mt, nmads=3, type="higher")
+prefilterstats <- data.frame(row.names=sce@colData$Barcode, counts=sce$total_counts, features=sce$total_features_by_counts, pct.mito=sce$pct_counts_Mt)
+write.table(prefilterstats,paste0(projectId,"_prefilter_metrics.txt"),sep="\t",quote=F,col.names=NA)
 sce$keep <- !(libsize.drop | feature.drop | mito.drop)
 sce_filtered <- sce[,!(libsize.drop | feature.drop | mito.drop)]
 keepcells <- sce_filtered@colData$Barcode
@@ -76,8 +94,19 @@ if (all(grepl(pattern = "\\-1$", x = keepcells))) {
 	keepcells <- as.vector(x = as.character(x = sapply(X = keepcells, FUN = ExtractField, field = 1, delim = "-")))
 }
 
-so.data <- Read10X(matrix)
-so <- CreateSeuratObject(so.data, min.genes = 0, min.cells=round(0.001*ncol(sce)), project=projectId)
+if(mattype=="cellranger"){
+  so.data <- Read10X(matrix)
+  so <- CreateSeuratObject(so.data, 
+                         min.genes = 0, 
+                         min.cells=ifelse(round(0.001*ncol(sce))!=0,round(0.001*ncol(sce)),1), 
+                         project=projectId)
+}else if(mattype=="biorad"){
+  so <- CreateSeuratObject(raw.data = counts.matrix, 
+                           min.genes = 0, 
+                           min.cells=ifelse(round(0.001*ncol(sce))!=0,round(0.001*ncol(sce)),1), 
+                           project=projectId)
+  so <- MakeSparse(so)
+}
 # so@raw.data <- so@data
 # so <- Setup(so, min.genes=0, min.cells=round(0.001*ncol(sce)), do.logNormalize=T, do.scale=F, do.center=F, total.expr=1e4, project=projectId, save.raw=F)
 ```
@@ -169,15 +198,37 @@ if(grepl("hg",species)|grepl("mm",species)){
   if(grepl("mm",species)){
     pairs <- readRDS(system.file("exdata", "mouse_cycle_markers.rds", package="scran"))
   }
-  assignments <- cyclone(sce_filtered, pairs, gene.names=rownames(sce_filtered))
+  sce_filtered_temp <- sce_filtered
+  if(mattype=="biorad"){
+    if(grepl("hg",species)){
+      annotation <- org.Hs.eg.db
+    }
+    if(grepl("mm",species)){
+      annotation <- org.Mm.eg.db
+    }
+    genes <- rownames(sce_filtered_temp)
+    g2e <- AnnotationDbi::select(annotation,genes,"ENSEMBL","SYMBOL")
+    g2e <- g2e[!duplicated(g2e$ENSEMBL),]
+    g2e$ENSEMBL[is.na(g2e$ENSEMBL)] <- g2e$SYMBOL[is.na(g2e$ENSEMBL)]
+    rownames(sce_filtered_temp)<-g2e$ENSEMBL
+  }
+  assignments <- cyclone(sce_filtered_temp, pairs, gene.names=rownames(sce_filtered_temp))
   plot(assignments$score$G1, assignments$score$G2M, xlab="G1 score", ylab="G2/M score", pch=16, 
     col = ifelse((assignments$score$G1>=0.5)&(assignments$score$G2M<0.5),'green','orange'))
   abline(h=0.5,col="red")
   abline(v=0.5,col="red")
-  legend("topleft", paste0("[G2/M] ",length(which(assignments$score$G2M >= 0.5))), bty="n", text.col="red")
-  legend("topright", paste0("[Unknown] ",length(which(assignments$score$G1 >= 0.5 & assignments$score$G2M >= 0.5))), bty="n", text.col="red")
-  legend("bottomleft", paste0("[S] ",length(which(assignments$score$G1 < 0.5 & assignments$score$G2M < 0.5))), bty="n", text.col="red")
-  legend("bottomright", paste0("[G1] ",length(which(assignments$score$G1 >= 0.5))), bty="n", text.col="red")
+  legend("topleft", paste0("[G2/M] ",
+         length(which(assignments$score$G2M >= 0.5 & assignments$score$G1 < 0.5))),
+         bty="n", text.col="red")
+  legend("topright", paste0("[Unknown] ",
+         length(which(assignments$score$G1 >= 0.5 & assignments$score$G2M >= 0.5))),
+         bty="n", text.col="red")
+  legend("bottomleft", paste0("[S] ",
+         length(which(assignments$score$G1 < 0.5 & assignments$score$G2M < 0.5))),
+         bty="n", text.col="red")
+  legend("bottomright", paste0("[G1] ",
+         length(which(assignments$score$G1 >= 0.5 & assignments$score$G2M < 0.5))),
+         bty="n", text.col="red")
 }
 sce$G1score <- assignments$score$G1
 sce$G2Mscore <- assignments$score$G2M
@@ -189,7 +240,7 @@ sce$G2Mscore <- assignments$score$G2M
 #norm_exprs(sce) <- removeBatchEffect(exprs(sce), covariates=data.frame(assignments$score[,c("G1", "G2M")],percent.mito=sce$pct_counts_Mt,nUMI=so@data.info$nUMI))
 stage <- c()
 for(i in 1:length(sce$G1score)){
-  if(sce$G1score[i] >= 0.5 & sce$G2Mscore[i] >= 0.5){
+  if(isNA(sce$G1score[i]) | isNA(sce$G2Mscore[i]) | (sce$G1score[i] >= 0.5 & sce$G2Mscore[i] >= 0.5)){
     stage[i] <- "Unknown"
   }else if(sce$G1score[i] >= 0.5){
     stage[i] <- "G1"
@@ -346,7 +397,7 @@ PCElbowPlot(so)
 
 ```{r Seurat_save_rds, echo=FALSE,warning=FALSE,message=FALSE}
 gdata::keep(so, params, species, projectId, sure=TRUE) ## memory optimizations
-saveRDS(so, paste0(projectId,"_seurat_object.rds")) ## output SO
+saveRDS(so, paste0(projectId,"_initial_seurat_object.rds")) ## output SO
 exprs <- as.matrix(so@scale.data) ## only need expression matrix for next step, use scaled values
 gdata::keep(exprs, params, species, sure=TRUE)
 ```

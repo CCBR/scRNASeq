@@ -7,6 +7,7 @@ rmarkdown::render("scrna_initial.Rmd", params = list(
     matrix = args[2],
     species = args[3],
     projectId = args[4],
-    projectDesc = args[5]
+    projectDesc = args[5],
+    mattype = args[6]
   ))
 
