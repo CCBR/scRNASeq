@@ -1,0 +1,105 @@
+---
+title: "Multi-Sample Cluster Analysis"
+author: "CCBR scRNAseq pipeline"
+output: html_document
+params:
+  seurat: "/path/to/seurat_combined_object"
+  ccs: 10
+  resolution: 0.6
+  projectId: "<projectId>"
+  projectDesc: "<desc>"
+---
+
+
+```{r headers, include=FALSE, warning=FALSE, message=FALSE}
+projectId<-params$projectId
+projectDesc<-params$projectDesc
+dateandtime<-format(Sys.time(), "%a %b %d %Y - %X")
+so_save<-params$seurat
+ccs<-params$ccs
+res<-params$resolution
+```
+
+### **Project:**
+####    *`r projectId`*
+### **Description:** 
+####    *`r projectDesc`*
+### **Report generated:** 
+####    *`r dateandtime`* 
+
+```{r setup, echo=FALSE, warning=FALSE,message=FALSE}
+library(knitr)
+library(rgl)
+library(Seurat)
+library(dplyr)
+library(Matrix)
+library(methods)
+library(igraph)
+
+so_combined <- readRDS(so_save)
+```
+
+### **Post-Alignment CC1:CC2**
+
+```{r Seurat_postalign, echo=FALSE,warning=FALSE,message=FALSE}
+so_combined <- AlignSubspace(so_combined, reduction.type = "cca", grouping.var = "sample", dims.align = 1:ccs)
+#Post-alignment CCA visualization
+DimPlot(object = so_combined, reduction.use = "cca.aligned", group.by = "sample", pt.size = 0.5)
+VlnPlot(object = so_combined, features.plot = "ACC1", group.by = "sample")
+VlnPlot(object = so_combined, features.plot = "ACC2", group.by = "sample")
+```
+
+### **tSNE**
+
+```{r Seurat_tsne, echo=FALSE,warning=FALSE,message=FALSE}
+#T-SNE AND CLUSTERING
+so_combined <- FindClusters(so_combined, reduction.type = "cca.aligned", dims.use = 1:ccs, save.SNN = T, resolution = res, random.seed=1234567)
+so_combined <- RunTSNE(so_combined, reduction.use = "cca.aligned", dims.use = 1:ccs, do.fast = T)
+saveRDS(so_combined,paste0(projectId,"_combined_clustered_seurat_object_",ccs,"_",res,".Rds"))
+
+TSNEPlot(so_combined, do.label = F, pt.size = 1, group.by = "sample")
+TSNEPlot(so_combined, do.label = T, pt.size = 1)
+```
+
+```{r Seurat_genes, echo=FALSE,warning=FALSE,message=FALSE,results='hide'}
+nclusts <- length(levels(so_combined@ident))
+glist <- list()
+tables <- htmltools::tagList()
+for(i in 1:nclusts){
+  glist[[i]]<-FindMarkers(so_combined,ident.1=i-1,min.pct=0.25)
+  tables[[i]] <- DT::datatable(glist[[i]][1:100,], caption=htmltools::tags$caption(paste0("Top 100 gene markers for cluster #",(i-1)) ,style="color:red; font-size: 12px" ),rownames=T)
+  write.table(glist[[i]],file=paste0("Seurat_",ccs,"_",res,"_cluster_",(i-1),".txt"),sep="\t",quote=F)
+}
+```
+
+### **Top 10 Cluster Marker Heatmap**
+```{r markerheatmap, echo=FALSE,warning=FALSE,message=FALSE}
+so_combined.markers <- FindAllMarkers(object = so_combined, only.pos = TRUE, min.pct = 0.25, thresh.use = 0.25)
+top10 <- so_combined.markers %>% group_by(cluster) %>% top_n(10, avg_logFC)
+DoHeatmap(object = so_combined, genes.use = top10$gene, slim.col.label = TRUE, remove.key = TRUE)
+```
+
+### **Gene Lists**
+
+```{r Seurat_genes_table, echo=FALSE,warning=FALSE,message=FALSE,results='asis'}
+tables
+```
+
+
+```{r feature_plot, echo=FALSE,warning=FALSE,message=FALSE}
+#FeaturePlot(object = so_combined, features.plot = c("HBA2","CD3D","CD4","CD8A","PTCRA","RAG1"), do.hover = FALSE, data.hover = c("ident", "sample", "ACC1", "nGene"))
+
+CoexpressionPlot <- function(obj,features,min.expr=0){
+  exprs_data <- FetchData(obj,vars.all=features)
+  coexpressed <- rownames(exprs_data[apply(exprs_data, 1, function(row) {all(row > min.expr)}),])
+  obj <- SetIdent(obj,ident.use="not_coexpressed")
+  if(length(coexpressed)>0){
+    obj <- SetIdent(obj,cells.use=coexpressed,ident.use="coexpressed")
+  }
+  TSNEPlot(obj,pt.size=1)
+}
+
+#CoexpressionPlot(so_combined,c("CD4","CD8A"))
+```
+
+

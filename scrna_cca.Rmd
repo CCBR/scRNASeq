@@ -1,0 +1,111 @@
+---
+title: "Multi-Sample CCA"
+author: "CCBR scRNAseq pipeline"
+output: html_document
+params:
+  seurat: c("/path/to/seurat/save1","/path/to/seurat/save2")
+  contrasts: NULL
+  projectId: "<projectId>"
+  projectDesc: "<desc>"
+---
+
+
+```{r headers, include=FALSE, warning=FALSE, message=FALSE}
+projectId<-params$projectId
+projectDesc<-params$projectDesc
+dateandtime<-format(Sys.time(), "%a %b %d %Y - %X")
+so_saves<-params$seurat
+pcs<-params$pcs
+res<-params$resolution
+contrast.labels <- params$contrasts
+```
+
+### **Project:**
+####    *`r projectId`*
+### **Description:** 
+####    *`r projectDesc`*
+### **Report generated:** 
+####    *`r dateandtime`* 
+
+```{r setup, echo=FALSE, warning=FALSE,message=FALSE, results='hide',fig.keep='all'}
+library(knitr)
+library(rgl)
+library(Seurat)
+library(dplyr)
+library(Matrix)
+library(methods)
+library(igraph)
+
+all_so <- list()
+for(i in 1:length(so_saves)){
+	all_so[[i]] <- readRDS(so_saves[[i]])
+	all_so[[i]]@meta.data$sample <- paste0(i,".",all_so[[i]]@project.name)
+	if(length(contrast.labels)==length(so_saves)){
+	  cat(i)
+	  all_so[[i]]@meta.data$contrast <- contrast.labels[i]
+	}
+}
+
+#GET TOP 1000 HIGHLY VARIABLE GENES FROM ALL DATASETS
+vargenes <- c()
+for(so in all_so){
+	vargenes <- c(vargenes, head(rownames(so@hvg.info), 1000))
+}
+if(length(all_so)<=2){
+	#In case of 2 datasets:
+	#CAN USE THE UNION OF HIGHLY VARIABLE GENES
+	vargenes <- unique(vargenes)
+} else{
+	#In case of more than 2 datasets/samples:
+	#USE ONLY GENES THAT ARE CONSIDERED VARIABLE IN MULTIPLE DATASETS
+	vargenes <- names(which(table(vargenes) > 1))
+}
+#ENSURE ONLY USING GENES REPRESENTED IN THE FILTERED GENES OF EACH DATASET
+for(so in all_so){
+	vargenes <- intersect(vargenes, rownames(so@scale.data))
+}
+```
+
+```{r Seurat_runcca, echo=FALSE,warning=FALSE,message=FALSE, results='hide',fig.keep='all'}
+#RUN CCA
+if(length(all_so)==2){
+  so_combined <- RunCCA(all_so[[1]],all_so[[2]], genes.use=vargenes, num.cc = 30,
+                        add.cell.id1=paste0(all_so[[1]]@meta.data$sample,"."),
+                        add.cell.id2=paste0(all_so[[2]]@meta.data$sample,"."))
+} else{
+  #FIRST ADDING IDS TO CELL NAMES TO PREVENT CONFLICTING BARCODES BETWEEN DATASETS
+  #Because seurat multicca does not support add.cell.id parameters
+  for(i in 1:length(all_so)){
+    all_so[[i]]@cell.names <- paste(i, all_so[[i]]@cell.names, 
+                                    sep = "_")
+    colnames(x = all_so[[i]]@raw.data) <- paste(i, colnames(x = all_so[[i]]@raw.data), sep = "_")
+    rownames(x = all_so[[i]]@meta.data) <- paste(i, rownames(x = all_so[[i]]@meta.data), sep = "_")
+  }
+  so_combined <- RunMultiCCA(all_so, genes.use=vargenes, num.ccs = 30)
+}
+```
+
+### **Pre-Alignment CC1:CC2**
+
+```{r Seurat_ccaplot, echo=FALSE,warning=FALSE,message=FALSE}
+DimPlot(object = so_combined, reduction.use = "cca", group.by = "sample", pt.size = 0.5)
+VlnPlot(object = so_combined, features.plot = "CC1", group.by = "sample")
+VlnPlot(object = so_combined, features.plot = "CC2", group.by = "sample")
+```
+
+### **Metagene Biweight Midcorrelation Plot**
+
+```{r Seurat_bicor, echo=FALSE,warning=FALSE,message=FALSE,results='hide',fig.keep='all'}
+mbp <- MetageneBicorPlot(so_combined, grouping.var = "sample", dims.eval = 1:30, display.progress = TRUE)
+saveRDS(so_combined,paste0(projectId,"_combined_seurat_object.Rds"))
+```
+
+### **CC Heatmaps**
+
+```{r Seurat_ccheatmaps, echo=FALSE,warning=FALSE,message=FALSE}
+DimHeatmap(object = so_combined, reduction.type = "cca", cells.use = 500, dim.use = 1:3, do.balanced = TRUE, ncol=2)
+DimHeatmap(object = so_combined, reduction.type = "cca", cells.use = 500, dim.use = 4:9, do.balanced = TRUE)
+DimHeatmap(object = so_combined, reduction.type = "cca", cells.use = 500, dim.use = 10:15, do.balanced = TRUE)
+DimHeatmap(object = so_combined, reduction.type = "cca", cells.use = 500, dim.use = 16:21, do.balanced = TRUE)
+DimHeatmap(object = so_combined, reduction.type = "cca", cells.use = 500, dim.use = 22:30, do.balanced = TRUE)
+```
