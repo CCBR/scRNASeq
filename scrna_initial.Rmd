@@ -8,6 +8,7 @@ params:
   species: "hg19"
   projectId: "<projectId>"
   projectDesc: "<desc>"
+  doCycleRegress: "TRUE"
 ---
 
 ```{r headers, include=FALSE, warning=FALSE, message=FALSE}
@@ -17,6 +18,7 @@ dateandtime<-format(Sys.time(), "%a %b %d %Y - %X")
 species<-params$species
 matrix<-params$matrix
 mattype <- params$mattype
+doCycleRegress <- params$doCycleRegress
 ```
 
 ### **Project:**
@@ -26,7 +28,7 @@ mattype <- params$mattype
 ### **Report generated:** 
 ####    *`r dateandtime`* 
 
-```{r setup, echo=FALSE, warning=FALSE,message=FALSE,results='hide',fig.keep='all'}
+```{r setup, echo=FALSE, warning=FALSE,message=FALSE,fig.keep='all'}
 # library(rgl)
 library(knitr) #
 library(Seurat) #
@@ -63,6 +65,56 @@ library(ggplot2)
 
 if(mattype=="cellranger"){
   sce <- read10xCounts(matrix)
+}else if(mattype=="cellranger_raw"){
+  sce <- read10xCounts(matrix)
+  is.mito <- grepl("^MT-",rowData(sce)@listData$Symbol)|
+    grepl("^mt-",rowData(sce)@listData$Symbol)|
+    grepl("^Mt-",rowData(sce)@listData$Symbol)
+  sce <- calculateQCMetrics(sce, feature_controls=list(Mt=is.mito))
+  bcrank <- barcodeRanks(counts(sce))
+  
+  uniq <- !duplicated(bcrank$rank)
+  bcplot <- data.frame(rank=bcrank$rank[uniq], total=bcrank$total[uniq])
+  bcplot_mito <- ggplot(bcplot, aes(rank,total)) + 
+    scale_x_continuous(trans='log10') +
+    scale_y_continuous(trans='log10') +
+    geom_point(shape=1, aes(colour=sce$pct_counts_Mt[uniq])) +
+    scale_colour_gradient2(limits = c(0,10), high="red") +
+    xlab("Rank") +
+    ylab("Total UMI count") +
+    geom_hline(yintercept=bcrank$inflection, linetype="dashed", col="darkgreen") +
+    geom_text(aes(0,bcrank$inflection,label="Inflection"),vjust=-1, hjust=0) +
+    geom_hline(yintercept=bcrank$knee, linetype="dashed", col="dodgerblue") +
+    geom_text(aes(0,bcrank$knee,label="Knee"),vjust=-1, hjust=0) +
+    ggtitle(label = "Barcode Rank Plot (w/ pct mito)") +
+    theme(legend.title = element_blank())
+  
+  set.seed(100)
+  e.out <- emptyDrops(counts(sce))
+  sce$calledcell <- FALSE
+  sce$calledcell[which(e.out$FDR <= 0.01)] <- TRUE
+  bcplot_caller <- ggplot(bcplot, aes(rank,total)) + 
+    scale_x_continuous(trans='log10') +
+    scale_y_continuous(trans='log10') +
+    geom_point(shape=1, aes(colour=sce$calledcell[uniq])) +
+    xlab("Rank") +
+    ylab("Total UMI count") +
+    geom_hline(yintercept=bcrank$inflection, linetype="dashed", col="darkgreen") +
+    geom_text(aes(0,bcrank$inflection,label="Inflection"),vjust=-1, hjust=0) +
+    geom_hline(yintercept=bcrank$knee, linetype="dashed", col="dodgerblue") +
+    geom_text(aes(0,bcrank$knee,label="Knee"),vjust=-1, hjust=0) +
+    ggtitle(label = "Barcode Rank Plot (cell calling)") +
+    theme(legend.title = element_blank())
+  
+  print(bcplot_mito)
+  print(bcplot_caller)
+  
+  sce <- sce[,which(sce$calledcell)]
+  calledcells <- sce@colData$Barcode
+  if (all(grepl(pattern = "\\-1$", x = calledcells))) {
+	  calledcells <- 
+	    as.vector(x = as.character(x = sapply(X = calledcells, FUN = ExtractField, field = 1, delim = "-")))
+  }
 }else if(mattype=="biorad"){
   counts.table <- read.delim(matrix, stringsAsFactors = F, header = TRUE, sep=",", row.names=1)
   counts.matrix <- t(as.matrix(counts.table))
@@ -100,6 +152,13 @@ if(mattype=="cellranger"){
                          min.genes = 0, 
                          min.cells=ifelse(round(0.001*ncol(sce))!=0,round(0.001*ncol(sce)),1), 
                          project=projectId)
+}else if(mattype=="cellranger_raw"){
+  so.data <- Read10X(matrix)
+  so.data <- so.data[,calledcells]
+  so <- CreateSeuratObject(so.data, 
+                         min.genes = 0, 
+                         min.cells=ifelse(round(0.001*ncol(sce))!=0,round(0.001*ncol(sce)),1), 
+                         project=projectId)
 }else if(mattype=="biorad"){
   so <- CreateSeuratObject(raw.data = counts.matrix, 
                            min.genes = 0, 
@@ -110,6 +169,8 @@ if(mattype=="cellranger"){
 # so@raw.data <- so@data
 # so <- Setup(so, min.genes=0, min.cells=round(0.001*ncol(sce)), do.logNormalize=T, do.scale=F, do.center=F, total.expr=1e4, project=projectId, save.raw=F)
 ```
+
+### **There are** `r length(calledcells)` **called cells in this sample.**
 
 ### **nGenes vs nUMI** (Pre-Filter)
 
@@ -191,66 +252,78 @@ plot(density(sce$pct_counts_Mt),col="red", xlab="Mitochondrial proportion (%)", 
 ### **Cell Cycle Phase**
 
 ```{r cell_cycle, echo=FALSE,warning=FALSE,message=FALSE}
-if(grepl("hg",species)|grepl("mm",species)){
-  if(grepl("hg",species)){
-    pairs <- readRDS(system.file("exdata", "human_cycle_markers.rds", package="scran"))
-  }
-  if(grepl("mm",species)){
-    pairs <- readRDS(system.file("exdata", "mouse_cycle_markers.rds", package="scran"))
-  }
-  sce_filtered_temp <- sce_filtered
-  if(mattype=="biorad"){
+if(doCycleRegress){
+  if(grepl("hg",species)|grepl("mm",species)){
     if(grepl("hg",species)){
-      annotation <- org.Hs.eg.db
+      pairs <- readRDS(system.file("exdata", "human_cycle_markers.rds", package="scran"))
     }
     if(grepl("mm",species)){
-      annotation <- org.Mm.eg.db
+      pairs <- readRDS(system.file("exdata", "mouse_cycle_markers.rds", package="scran"))
     }
-    genes <- rownames(sce_filtered_temp)
-    g2e <- AnnotationDbi::select(annotation,genes,"ENSEMBL","SYMBOL")
-    g2e <- g2e[!duplicated(g2e$ENSEMBL),]
-    g2e$ENSEMBL[is.na(g2e$ENSEMBL)] <- g2e$SYMBOL[is.na(g2e$ENSEMBL)]
-    rownames(sce_filtered_temp)<-g2e$ENSEMBL
+    sce_filtered_temp <- sce_filtered
+    if(mattype=="biorad"){
+      if(grepl("hg",species)){
+        annotation <- org.Hs.eg.db
+      }
+      if(grepl("mm",species)){
+        annotation <- org.Mm.eg.db
+      }
+      genes <- rownames(sce_filtered_temp)
+      g2e <- AnnotationDbi::select(annotation,genes,"ENSEMBL","SYMBOL")
+      g2e <- g2e[!duplicated(g2e$ENSEMBL),]
+      g2e$ENSEMBL[is.na(g2e$ENSEMBL)] <- g2e$SYMBOL[is.na(g2e$ENSEMBL)]
+      rownames(sce_filtered_temp)<-g2e$ENSEMBL
+    }
+    assignments <- cyclone(sce_filtered_temp, pairs, gene.names=rownames(sce_filtered_temp))
+    plot(assignments$score$G1, assignments$score$G2M, xlab="G1 score", ylab="G2/M score", pch=16, 
+      col = ifelse((assignments$score$G1>=0.5)&(assignments$score$G2M<0.5),'green','orange'))
+    abline(h=0.5,col="red")
+    abline(v=0.5,col="red")
+    legend("topleft", paste0("[G2/M] ",
+           length(which(assignments$score$G2M >= 0.5 & assignments$score$G1 < 0.5))),
+           bty="n", text.col="red")
+    legend("topright", paste0("[Unknown] ",
+           length(which(assignments$score$G1 >= 0.5 & assignments$score$G2M >= 0.5))),
+           bty="n", text.col="red")
+    legend("bottomleft", paste0("[S] ",
+           length(which(assignments$score$G1 < 0.5 & assignments$score$G2M < 0.5))),
+           bty="n", text.col="red")
+    legend("bottomright", paste0("[G1] ",
+           length(which(assignments$score$G1 >= 0.5 & assignments$score$G2M < 0.5))),
+           bty="n", text.col="red")
   }
-  assignments <- cyclone(sce_filtered_temp, pairs, gene.names=rownames(sce_filtered_temp))
-  plot(assignments$score$G1, assignments$score$G2M, xlab="G1 score", ylab="G2/M score", pch=16, 
-    col = ifelse((assignments$score$G1>=0.5)&(assignments$score$G2M<0.5),'green','orange'))
-  abline(h=0.5,col="red")
-  abline(v=0.5,col="red")
-  legend("topleft", paste0("[G2/M] ",
-         length(which(assignments$score$G2M >= 0.5 & assignments$score$G1 < 0.5))),
-         bty="n", text.col="red")
-  legend("topright", paste0("[Unknown] ",
-         length(which(assignments$score$G1 >= 0.5 & assignments$score$G2M >= 0.5))),
-         bty="n", text.col="red")
-  legend("bottomleft", paste0("[S] ",
-         length(which(assignments$score$G1 < 0.5 & assignments$score$G2M < 0.5))),
-         bty="n", text.col="red")
-  legend("bottomright", paste0("[G1] ",
-         length(which(assignments$score$G1 >= 0.5 & assignments$score$G2M < 0.5))),
-         bty="n", text.col="red")
+  sce$G1score <- assignments$score$G1
+  sce$G2Mscore <- assignments$score$G2M
 }
-sce$G1score <- assignments$score$G1
-sce$G2Mscore <- assignments$score$G2M
 ```
 
 ### **PCA 1:2 Before Regressing Cell Cycle Phase**
 
 ```{r regress_confounding, echo=FALSE,warning=FALSE,message=FALSE,message=FALSE,results='hide',fig.keep='all'}
 #norm_exprs(sce) <- removeBatchEffect(exprs(sce), covariates=data.frame(assignments$score[,c("G1", "G2M")],percent.mito=sce$pct_counts_Mt,nUMI=so@data.info$nUMI))
-stage <- c()
-for(i in 1:length(sce$G1score)){
-  if(isNA(sce$G1score[i]) | isNA(sce$G2Mscore[i]) | (sce$G1score[i] >= 0.5 & sce$G2Mscore[i] >= 0.5)){
-    stage[i] <- "Unknown"
-  }else if(sce$G1score[i] >= 0.5){
-    stage[i] <- "G1"
-  }else if(sce$G2Mscore[i] >= 0.5){
-    stage[i] <- "G2M"
-  }else{
-    stage[i] <- "S"
+if(doCycleRegress){
+  stage <- c()
+  for(i in 1:length(sce$G1score)){
+    if(isNA(sce$G1score[i]) | isNA(sce$G2Mscore[i]) | (sce$G1score[i] >= 0.5 & sce$G2Mscore[i] >= 0.5)){
+      stage[i] <- "Unknown"
+      if(isNA(sce$G1score[i])){
+        sce$G1score[i] <- 0.5
+      }
+      if(isNA(sce$G2Mscore[i])){
+        sce$G2Mscore[i] <- 0.5
+      }
+    }else if(sce$G1score[i] >= 0.5){
+      stage[i] <- "G1"
+    }else if(sce$G2Mscore[i] >= 0.5){
+      stage[i] <- "G2M"
+    }else{
+      stage[i] <- "S"
+    }
   }
+  metadata <- data.frame(percent.mito=sce$pct_counts_Mt,G1.score=sce$G1score,G2M.score=sce$G2Mscore,stage=stage,row.names=keepcells)
+}else{
+  metadata <- data.frame(percent.mito=sce$pct_counts_Mt,row.names=keepcells)
 }
-metadata <- data.frame(percent.mito=sce$pct_counts_Mt,G1.score=sce$G1score,G2M.score=sce$G2Mscore,stage=stage,row.names=keepcells)
 so <- AddMetaData(so, metadata)
 so <- FindVariableGenes(so, mean.function = ExpMean, dispersion.function = LogVMR, x.low.cutoff = 0.0125, x.high.cutoff = 3, y.cutoff = 0.5, do.plot=F)
 so_temp <- ScaleData(object = so, vars.to.regress = c("nUMI", "percent.mito"))
@@ -262,10 +335,14 @@ PCAPlot(so_temp, 1, 2, group.by="stage",cols.use=c(rgb(1, 0, 0, 0.7),rgb(0, 1, 0
 ### **PCA 1:2 After Regressing by G1/G2M Scores**
 
 ```{r regress_confounding_final, echo=FALSE,warning=FALSE,message=FALSE,message=FALSE,results='hide',fig.keep='all'}
-so <- ScaleData(object = so, vars.to.regress = c("nUMI", "percent.mito", "G1.score", "G2M.score"))
-so <- RunPCA(so, pc.genes = so@var.genes, do.print = FALSE)
-#so <- ProjectPCA(so,do.print=F)
-PCAPlot(so, 1, 2, group.by="stage",cols.use=c(rgb(1, 0, 0, 0.7),rgb(0, 1, 0, 0.3),rgb(0, 0, 1, 0.7),rgb(0, 0, 0, 0.7)))
+if(doCycleRegress){
+  so <- ScaleData(object = so, vars.to.regress = c("nUMI", "percent.mito", "G1.score", "G2M.score"))
+  so <- RunPCA(so, pc.genes = so@var.genes, do.print = FALSE)
+  #so <- ProjectPCA(so,do.print=F)
+  PCAPlot(so, 1, 2, group.by="stage",cols.use=c(rgb(1, 0, 0, 0.7),rgb(0, 1, 0, 0.3),rgb(0, 0, 1, 0.7),rgb(0, 0, 0, 0.7)))
+}else{
+  so <- so_temp
+}
 ```
 
 ### **Highest Expression**
