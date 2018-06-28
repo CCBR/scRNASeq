@@ -42,6 +42,7 @@ so_combined <- readRDS(so_save)
 ### **Post-Alignment CC1:CC2**
 
 ```{r Seurat_postalign, echo=FALSE,warning=FALSE,message=FALSE}
+#CCA Alignment - adjusts CC scores to remove batch effects between samples
 so_combined <- AlignSubspace(so_combined, reduction.type = "cca", grouping.var = "sample", dims.align = 1:ccs)
 #Post-alignment CCA visualization
 DimPlot(object = so_combined, reduction.use = "cca.aligned", group.by = "sample", pt.size = 0.5)
@@ -53,6 +54,8 @@ VlnPlot(object = so_combined, features.plot = "ACC2", group.by = "sample")
 
 ```{r Seurat_tsne, echo=FALSE,warning=FALSE,message=FALSE}
 #T-SNE AND CLUSTERING
+#Outputs tSNE with clustering given cc selection and cluster resolution
+#Reminder: Default resolution is around 0.6, lower res = less clusters
 so_combined <- FindClusters(so_combined, reduction.type = "cca.aligned", dims.use = 1:ccs, save.SNN = T, resolution = res, random.seed=1234567)
 so_combined <- RunTSNE(so_combined, reduction.use = "cca.aligned", dims.use = 1:ccs, do.fast = T)
 saveRDS(so_combined,paste0(projectId,"_combined_clustered_seurat_object_",ccs,"_",res,".Rds"))
@@ -62,6 +65,8 @@ TSNEPlot(so_combined, do.label = T, pt.size = 1)
 ```
 
 ```{r Seurat_genes, echo=FALSE,warning=FALSE,message=FALSE,results='hide'}
+#Generates html tables for the top 100 gene markers that identify each cluster
+#Also saves the full table for each cluster as text file
 nclusts <- length(levels(so_combined@ident))
 glist <- list()
 tables <- htmltools::tagList()
@@ -74,6 +79,8 @@ for(i in 1:nclusts){
 
 ### **Top 10 Cluster Marker Heatmap**
 ```{r markerheatmap, echo=FALSE,warning=FALSE,message=FALSE}
+#Generates a heatmap of subsampled cells of each cluster vs marker genes
+#Useful for validating clustering
 so_combined.markers <- FindAllMarkers(object = so_combined, only.pos = TRUE, min.pct = 0.25, thresh.use = 0.25)
 top10 <- so_combined.markers %>% group_by(cluster) %>% top_n(10, avg_logFC)
 DoHeatmap(object = so_combined, genes.use = top10$gene, slim.col.label = TRUE, remove.key = TRUE)
@@ -82,6 +89,7 @@ DoHeatmap(object = so_combined, genes.use = top10$gene, slim.col.label = TRUE, r
 ### **Gene Lists**
 
 ```{r Seurat_genes_table, echo=FALSE,warning=FALSE,message=FALSE,results='asis'}
+#Outputs the previously generated html tables
 tables
 ```
 

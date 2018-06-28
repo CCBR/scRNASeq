@@ -35,6 +35,9 @@ so <- readRDS(so_save)
 ### **Seurat JackStraw Plots**
 
 ```{r Seurat_jackstraw, echo=FALSE,warning=FALSE,message=FALSE,fig.height=20}
+#Generates jackstraw plots for 20 PCs
+#Computationally intesnive, may not be necessary if elbow plot looks good
+#But can be used as additional insight for PC selection for tSNE
 so <- JackStraw(so, num.replicate = 100, display.progress=FALSE)
 saveRDS(so, paste0(projectId,"_jackstraw_seurat_object.rds"))
 JackStrawPlot(so, PCs = 1:20, nCol=2)

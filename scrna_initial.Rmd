@@ -63,6 +63,8 @@ library(ggplot2)
 
 #knit_hooks$set(webgl = hook_webgl)
 
+#READS IN COUNTS MATRIX AS SINGLE CELL EXPRESSION SET OBJECT
+#THIS IS NEEDED FOR ANALYSIS IN SCATER
 if(mattype=="cellranger"){
   sce <- read10xCounts(matrix)
 }else if(mattype=="cellranger_raw"){
@@ -72,7 +74,8 @@ if(mattype=="cellranger"){
     grepl("^Mt-",rowData(sce)@listData$Symbol)
   sce <- calculateQCMetrics(sce, feature_controls=list(Mt=is.mito))
   bcrank <- barcodeRanks(counts(sce))
-  
+  #THE FOLLOWING GENERATES A BARCODE RANK PLOT
+  #highlights percent mitochondrial content
   uniq <- !duplicated(bcrank$rank)
   bcplot <- data.frame(rank=bcrank$rank[uniq], total=bcrank$total[uniq])
   bcplot_mito <- ggplot(bcplot, aes(rank,total)) + 
@@ -88,7 +91,8 @@ if(mattype=="cellranger"){
     geom_text(aes(0,bcrank$knee,label="Knee"),vjust=-1, hjust=0) +
     ggtitle(label = "Barcode Rank Plot (w/ pct mito)") +
     theme(legend.title = element_blank())
-  
+  #THE FOLLOWING GENERATES A BARCODE RANK PLOT USING CELL CALLING
+  #The cell calling algorithm in Droplet Utils as described in Lun et al.
   set.seed(100)
   e.out <- emptyDrops(counts(sce))
   sce$calledcell <- FALSE
@@ -115,7 +119,7 @@ if(mattype=="cellranger"){
 	  calledcells <- 
 	    as.vector(x = as.character(x = sapply(X = calledcells, FUN = ExtractField, field = 1, delim = "-")))
   }
-}else if(mattype=="biorad"){
+}else if(mattype=="biorad"){ #THIS IS FOR BIORAD/DENSE COUNT TABLE INPUT
   counts.table <- read.delim(matrix, stringsAsFactors = F, header = TRUE, sep=",", row.names=1)
   counts.matrix <- t(as.matrix(counts.table))
   sce <- SingleCellExperiment(list(counts=counts.matrix))
@@ -126,6 +130,10 @@ if(mattype=="cellranger"){
   stop("Input type not recognized!")
 }
 
+#The following calculates various metrics for gene and cell filtering
+#Genes that have expression in at least 0.1 percent of total # of cells
+#And cells are filtered on low ngenes, low nUMI, and high %mito
+#Cell filtering is done based off of distribution of data (median +/- 3 deviations)
 numcells <- nexprs(sce, byrow=TRUE)
 keepgenes <- numcells >= ifelse(round(0.001*ncol(sce))!=0,round(0.001*ncol(sce)),1)
 sce <- sce[keepgenes,]
@@ -139,13 +147,19 @@ mito.drop <- isOutlier(sce$pct_counts_Mt, nmads=3, type="higher")
 prefilterstats <- data.frame(row.names=sce@colData$Barcode, counts=sce$total_counts, features=sce$total_features_by_counts, pct.mito=sce$pct_counts_Mt)
 write.table(prefilterstats,paste0(projectId,"_prefilter_metrics.txt"),sep="\t",quote=F,col.names=NA)
 sce$keep <- !(libsize.drop | feature.drop | mito.drop)
+#STORE THE FILTERED DATASET IN A DIFFERENT OBJECT FOR NOW
 sce_filtered <- sce[,!(libsize.drop | feature.drop | mito.drop)]
 keepcells <- sce_filtered@colData$Barcode
 droppedcells <- setdiff(sce@colData$Barcode,keepcells)
+#Cellranger automatically formats the barcodes using the following lines of code
+#Have to execute the same lines on the vector of barcodes to keep in 'keepcells'
+#before passing it along to cellranger
 if (all(grepl(pattern = "\\-1$", x = keepcells))) {
 	keepcells <- as.vector(x = as.character(x = sapply(X = keepcells, FUN = ExtractField, field = 1, delim = "-")))
 }
 
+#Import data into Seurat using the following
+#The min.cells parameter is used here for the gene filtering
 if(mattype=="cellranger"){
   so.data <- Read10X(matrix)
   so <- CreateSeuratObject(so.data, 
@@ -154,6 +168,8 @@ if(mattype=="cellranger"){
                          project=projectId)
 }else if(mattype=="cellranger_raw"){
   so.data <- Read10X(matrix)
+  #WITH RAW CELLRANGER DATA, have to FIRST EXTRACT ONLY CALLED CELLS
+  #As determined by the Lun et al. method from the DropletUtils step
   so.data <- so.data[,calledcells]
   so <- CreateSeuratObject(so.data, 
                          min.genes = 0, 
@@ -175,6 +191,7 @@ if(mattype=="cellranger"){
 ### **nGenes vs nUMI** (Pre-Filter)
 
 ```{r nUMI_plot, echo=FALSE, message=FALSE, warning=FALSE}
+#THIS NGENE VS NUMI PLOT IS USEFUL FOR FINDING DROPLETS WITH MULT. CELLS
 #xthresh = median(so@data.info$nUMI)+3*stats::mad(so@data.info$nUMI)
 #ythresh = median(so@data.info$nGene)+3*stats::mad(so@data.info$nGene)
 GenePlot(so, "nUMI", "nGene")
@@ -185,6 +202,7 @@ so <- NormalizeData(so, normalization.method="LogNormalize", scale.factor = 1000
 ### **Pre-Filter Histograms**
 
 ```{r histograms_1, echo=FALSE,warning=FALSE,message=FALSE}
+#The following three chunks generates the prefilter histograms
 par(mfrow=c(1,2))
 hist(sce$total_counts, xlab="Library size", main="", 
     breaks=20, col="grey80", ylab="Number of cells")
@@ -209,6 +227,7 @@ plot(density(sce$pct_counts_Mt),col="red", xlab="Mitochondrial proportion (%)", 
 
 
 ```{r filter_metrics, echo=FALSE, message=FALSE, warning=FALSE, results='asis'}
+#OUTPUTS THE NUMBER OF CELLS IDENTIFIED FOR REMOVAL ON EACH FILTERING THRESHOLD
 kable(data.frame(ByLibSize=sum(libsize.drop), ByFeature=sum(feature.drop), ByMito=sum(mito.drop), Remaining=ncol(sce_filtered)))
 cat("  \n")
 #cat(unlist(droppedcells))
@@ -218,6 +237,11 @@ cat("  \n")
 ### **PCA highlighting poor quality cells that are dropped for downstream analysis**
 
 ```{r qc_pca, echo=FALSE,warning=FALSE,message=FALSE}
+#This PCA plot is generated in scater
+#This is just a useful tool to visualize the cells marked as dropped
+#The size of each point is also plotted by nGene
+#Please note: this uses scater to do PCA, rather than Seurat (will look different)
+#Only used for internal evaluation of filtering steps.
 sce <- scater::normalize(sce)
 sce <- scater::runPCA(sce)
 scater::plotPCA(sce,
@@ -225,6 +249,7 @@ scater::plotPCA(sce,
                 colour_by = "keep")
 sce_filtered <- scater::normalize(sce_filtered)
 sce_filtered <- runPCA(sce_filtered)
+#GRAB THE FILTERED DATASET FOR POST-FILTER HISTOGRAM GENERATION
 sce<-sce_filtered
 ```
 
@@ -252,6 +277,8 @@ plot(density(sce$pct_counts_Mt),col="red", xlab="Mitochondrial proportion (%)", 
 ### **Cell Cycle Phase**
 
 ```{r cell_cycle, echo=FALSE,warning=FALSE,message=FALSE}
+#Cell cycle phase assignment is done only if appropriate paramter is set
+#Uses Cyclone to do assignment
 if(doCycleRegress){
   if(grepl("hg",species)|grepl("mm",species)){
     if(grepl("hg",species)){
@@ -262,6 +289,8 @@ if(doCycleRegress){
     }
     sce_filtered_temp <- sce_filtered
     if(mattype=="biorad"){
+      #BIORAD/COUNTS MATRICIES TYPICALL USE ENSEMBL IDs
+      #This step is to convert the ensembl IDs to symbols
       if(grepl("hg",species)){
         annotation <- org.Hs.eg.db
       }
@@ -270,6 +299,7 @@ if(doCycleRegress){
       }
       genes <- rownames(sce_filtered_temp)
       g2e <- AnnotationDbi::select(annotation,genes,"ENSEMBL","SYMBOL")
+      #Hack to deal with many-to-one situations in annotation mapping
       g2e <- g2e[!duplicated(g2e$ENSEMBL),]
       g2e$ENSEMBL[is.na(g2e$ENSEMBL)] <- g2e$SYMBOL[is.na(g2e$ENSEMBL)]
       rownames(sce_filtered_temp)<-g2e$ENSEMBL
@@ -300,7 +330,7 @@ if(doCycleRegress){
 ### **PCA 1:2 Before Regressing Cell Cycle Phase**
 
 ```{r regress_confounding, echo=FALSE,warning=FALSE,message=FALSE,message=FALSE,results='hide',fig.keep='all'}
-#norm_exprs(sce) <- removeBatchEffect(exprs(sce), covariates=data.frame(assignments$score[,c("G1", "G2M")],percent.mito=sce$pct_counts_Mt,nUMI=so@data.info$nUMI))
+#THE FOLLOWING ATTACHES METADATA INFORMATION FOR nUMI, %mito, (and cycle stage)
 if(doCycleRegress){
   stage <- c()
   for(i in 1:length(sce$G1score)){
@@ -327,8 +357,9 @@ if(doCycleRegress){
 so <- AddMetaData(so, metadata)
 so <- FindVariableGenes(so, mean.function = ExpMean, dispersion.function = LogVMR, x.low.cutoff = 0.0125, x.high.cutoff = 3, y.cutoff = 0.5, do.plot=F)
 so_temp <- ScaleData(object = so, vars.to.regress = c("nUMI", "percent.mito"))
+#Note: can set ScaleData to only regress and not scale if this is an issue
+# - via setting do.scale=F
 so_temp <- RunPCA(so_temp, pc.genes = so_temp@var.genes, do.print = FALSE)
-#so_temp <- ProjectPCA(so_temp,do.print=F)
 PCAPlot(so_temp, 1, 2, group.by="stage",cols.use=c(rgb(1, 0, 0, 0.7),rgb(0, 1, 0, 0.3),rgb(0, 0, 1, 0.7),rgb(0, 0, 0, 0.7)))
 ```
 
@@ -338,7 +369,6 @@ PCAPlot(so_temp, 1, 2, group.by="stage",cols.use=c(rgb(1, 0, 0, 0.7),rgb(0, 1, 0
 if(doCycleRegress){
   so <- ScaleData(object = so, vars.to.regress = c("nUMI", "percent.mito", "G1.score", "G2M.score"))
   so <- RunPCA(so, pc.genes = so@var.genes, do.print = FALSE)
-  #so <- ProjectPCA(so,do.print=F)
   PCAPlot(so, 1, 2, group.by="stage",cols.use=c(rgb(1, 0, 0, 0.7),rgb(0, 1, 0, 0.3),rgb(0, 0, 1, 0.7),rgb(0, 0, 0, 0.7)))
 }else{
   so <- so_temp
@@ -362,6 +392,10 @@ so <- FindVariableGenes(so, mean.function = ExpMean, dispersion.function = LogVM
 
 ### **PCA 1:2 QC**
 ```{r Seurat_pcqc, echo=FALSE,warning=FALSE,message=FALSE,results='hide',fig.keep='all'}
+#The following is an implementation of Maggie's functions
+#FOR PCA PSEUDOCOLORING
+
+#Select color palette:
 #Lab.palette <- colorRampPalette(brewer.pal(8,"Set1"))
 #Lab.palette <- colorRampPalette(brewer.pal(8,"Set3"))
 Lab.palette <- colorRampPalette(brewer.pal(8,"Set2"))
@@ -482,6 +516,8 @@ gdata::keep(exprs, params, species, sure=TRUE)
 ### **GSVA Heatmap**
 
 ```{r gsva_heatmap, echo=FALSE,warning=FALSE,message=FALSE,results='hide',fig.keep='all',fig.height=10}
+#THIS CAN ONLY BE RUN ON HELIX/BIOWULF (references msigdb files)
+#If running locally, please point to different gmt files or remove this chunk
 if(grepl("hg",species)|grepl("mm",species)){
   eset <- ExpressionSet(assayData=exprs)
   eset_filtered <- varFilter(eset,var.func=IQR, var.cutoff=0.5, filterByQuantile=TRUE)
@@ -497,7 +533,7 @@ if(grepl("hg",species)|grepl("mm",species)){
   heatmap.2(top,trace="none",labRow=NULL,margins=c(1,20),cexRow=0.7)
 }
 
-#ignore this:
+#ignore this, just remnants of some stuff I was testing out:
 #pc1.scores <- gsva(pc1.exprs,gsets,min.sz=2,verbose=TRUE)
 #pc1.cells <- unname(so@dr$pca@cell.embeddings[,1])
 #col <- ifelse(pc1.cells<0,"blue","red")

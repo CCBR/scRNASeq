@@ -48,33 +48,38 @@ for(i in 1:length(so_saves)){
 
 #GET TOP 1000 HIGHLY VARIABLE GENES FROM ALL DATASETS
 vargenes <- c()
+#combine all the top 1k HVGs from each dataset
 for(so in all_so){
 	vargenes <- c(vargenes, head(rownames(so@hvg.info), 1000))
 }
 if(length(all_so)<=2){
-	#In case of 2 datasets:
+	#In case of only 2 datasets:
 	#CAN USE THE UNION OF HIGHLY VARIABLE GENES
 	vargenes <- unique(vargenes)
 } else{
 	#In case of more than 2 datasets/samples:
-	#USE ONLY GENES THAT ARE CONSIDERED VARIABLE IN MULTIPLE DATASETS
+	#USE ONLY GENES THAT ARE CONSIDERED VARIABLE IN 2 OR MORE DATASETS
 	vargenes <- names(which(table(vargenes) > 1))
 }
-#ENSURE ONLY USING GENES REPRESENTED IN THE FILTERED GENES OF EACH DATASET
+#ENSURE ONLY USING GENES REPRESENTED IN THE OVERALL GENE LIST OF EACH INDIV. DATASET
+#even if not highly variable in one dataset, it must at least be expressed in it
 for(so in all_so){
 	vargenes <- intersect(vargenes, rownames(so@scale.data))
 }
 ```
 
 ```{r Seurat_runcca, echo=FALSE,warning=FALSE,message=FALSE, results='hide',fig.keep='all'}
-#RUN CCA
+#RUN CCA to find components that are conserved between each dataset
 if(length(all_so)==2){
   so_combined <- RunCCA(all_so[[1]],all_so[[2]], genes.use=vargenes, num.cc = 30,
                         add.cell.id1=paste0(all_so[[1]]@meta.data$sample,"."),
                         add.cell.id2=paste0(all_so[[2]]@meta.data$sample,"."))
 } else{
-  #FIRST ADDING IDS TO CELL NAMES TO PREVENT CONFLICTING BARCODES BETWEEN DATASETS
+  #in the case of mroe than 2 datasets, have to use Seurat RunMultiCCA instead
+  #BUT FIRST ADDING IDS TO CELL NAMES TO PREVENT CONFLICTING BARCODES BETWEEN DATASETS
   #Because seurat multicca does not support add.cell.id parameters
+  #This is handled fine with the RunCCA function
+  #In fact these next few lines of code are interpreted from the code in RunCCA
   for(i in 1:length(all_so)){
     all_so[[i]]@cell.names <- paste(i, all_so[[i]]@cell.names, 
                                     sep = "_")
@@ -96,6 +101,7 @@ VlnPlot(object = so_combined, features.plot = "CC2", group.by = "sample")
 ### **Metagene Biweight Midcorrelation Plot**
 
 ```{r Seurat_bicor, echo=FALSE,warning=FALSE,message=FALSE,results='hide',fig.keep='all'}
+#Similar to an elbow plot, for CC selection
 mbp <- MetageneBicorPlot(so_combined, grouping.var = "sample", dims.eval = 1:30, display.progress = TRUE)
 saveRDS(so_combined,paste0(projectId,"_combined_seurat_object.Rds"))
 ```

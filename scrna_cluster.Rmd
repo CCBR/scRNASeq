@@ -42,6 +42,8 @@ so <- readRDS(so_save)
 ### **tSNE**
 
 ```{r Seurat_tsne, echo=FALSE,warning=FALSE,message=FALSE}
+#Outputs tSNE with clustering given pc selection and cluster resolution
+#Reminder: Default resolution is around 0.6, lower res = less clusters
 so <- FindClusters(so, reduction.type = "pca", dims.use = 1:pcs, resolution = res, print.output = 0, save.SNN = T, random.seed=1234567, temp.file.location=getwd())
 so <- RunTSNE(so, dims.use = 1:pcs, do.fast = T)
 TSNEPlot(so,do.label=T,do.return = T)
@@ -50,6 +52,8 @@ saveRDS(so, paste0(projectId,"_cluster_seurat_object.rds"))
 ```
 
 ```{r Seurat_genes, echo=FALSE,warning=FALSE,message=FALSE,results='hide'}
+#Generates html tables for the top 100 gene markers that identify each cluster
+#Also saves the full table for each cluster as text file
 nclusts <- length(levels(so@ident))
 glist <- list()
 tables <- htmltools::tagList()
@@ -63,6 +67,8 @@ for(i in 1:nclusts){
 
 ### **Top 10 Cluster Marker Heatmap**
 ```{r markerheatmap, echo=FALSE,warning=FALSE,message=FALSE}
+#Generates a heatmap of subsampled cells of each cluster vs marker genes
+#Useful for validating clustering
 so.markers <- FindAllMarkers(object = so, only.pos = TRUE, min.pct = 0.25, thresh.use = 0.25)
 top10 <- so.markers %>% group_by(cluster) %>% top_n(10, avg_logFC)
 DoHeatmap(object = so, genes.use = top10$gene, slim.col.label = TRUE, remove.key = TRUE)
@@ -71,12 +77,17 @@ DoHeatmap(object = so, genes.use = top10$gene, slim.col.label = TRUE, remove.key
 ### **Gene Lists**
 
 ```{r Seurat_genes_table, echo=FALSE,warning=FALSE,message=FALSE,results='asis'}
+#Outputs the previously generated html tables
 tables
 ```
 
-### **TSCAN Pseudotime Analysis**
 
 ```{r tscan, echo=FALSE,warning=FALSE,message=FALSE}
+#This is some implementation of Maggie's TSCAN code
+#Temporarily placed here
+#It will have to be its own RMD at some point, and run as needed
+#I'm not sure if I got this to actually work as I wanted...
+
 # pca.clus=data.frame(clusid=so@ident,so@dr$pca@cell.embeddings[,1:pcs])
 # meanPC = pca.clus %>% group_by(clusid) %>% summarise_all(funs(mean)) 
 # datclust=vector("list",4)
