@@ -119,6 +119,61 @@ if(mattype=="cellranger"){
 	  calledcells <- 
 	    as.vector(x = as.character(x = sapply(X = calledcells, FUN = ExtractField, field = 1, delim = "-")))
   }
+}else if(mattype=="zumi"){
+  zumi.output <- readRDS(matrix)
+  umicounts <- zumi.output$intron.exon$umicounts
+  sce <- SingleCellExperiment(list(counts=umicounts))
+  isSpike(sce, "MySpike") <- grep("^ERCC", rownames(sce))
+  sce@colData$Barcode <- colnames(sce)
+  rowData(sce)$Symbol <- rownames(sce)
+  
+  is.mito <- grepl("^MT-",rowData(sce)@listData$Symbol)|
+    grepl("^mt-",rowData(sce)@listData$Symbol)|
+    grepl("^Mt-",rowData(sce)@listData$Symbol)
+  sce <- calculateQCMetrics(sce, feature_controls=list(Mt=is.mito))
+  bcrank <- barcodeRanks(counts(sce))
+  #THE FOLLOWING GENERATES A BARCODE RANK PLOT
+  #highlights percent mitochondrial content
+  uniq <- !duplicated(bcrank$rank)
+  bcplot <- data.frame(rank=bcrank$rank[uniq], total=bcrank$total[uniq])
+  bcplot_mito <- ggplot(bcplot, aes(rank,total)) + 
+    scale_x_continuous(trans='log10') +
+    scale_y_continuous(trans='log10') +
+    geom_point(shape=1, aes(colour=sce$pct_counts_Mt[uniq])) +
+    scale_colour_gradient2(limits = c(0,10), high="red") +
+    xlab("Rank") +
+    ylab("Total UMI count") +
+    geom_hline(yintercept=bcrank$inflection, linetype="dashed", col="darkgreen") +
+    geom_text(aes(0,bcrank$inflection,label="Inflection"),vjust=-1, hjust=0) +
+    geom_hline(yintercept=bcrank$knee, linetype="dashed", col="dodgerblue") +
+    geom_text(aes(0,bcrank$knee,label="Knee"),vjust=-1, hjust=0) +
+    ggtitle(label = "Barcode Rank Plot (w/ pct mito)") +
+    theme(legend.title = element_blank())
+  #THE FOLLOWING GENERATES A BARCODE RANK PLOT USING CELL CALLING
+  #The cell calling algorithm in Droplet Utils as described in Lun et al.
+  set.seed(100)
+  e.out <- emptyDrops(counts(sce))
+  sce$calledcell <- FALSE
+  sce$calledcell[which(e.out$FDR <= 0.01)] <- TRUE
+  bcplot_caller <- ggplot(bcplot, aes(rank,total)) + 
+    scale_x_continuous(trans='log10') +
+    scale_y_continuous(trans='log10') +
+    geom_point(shape=1, aes(colour=sce$calledcell[uniq])) +
+    xlab("Rank") +
+    ylab("Total UMI count") +
+    geom_hline(yintercept=bcrank$inflection, linetype="dashed", col="darkgreen") +
+    geom_text(aes(0,bcrank$inflection,label="Inflection"),vjust=-1, hjust=0) +
+    geom_hline(yintercept=bcrank$knee, linetype="dashed", col="dodgerblue") +
+    geom_text(aes(0,bcrank$knee,label="Knee"),vjust=-1, hjust=0) +
+    ggtitle(label = "Barcode Rank Plot (cell calling)") +
+    theme(legend.title = element_blank())
+  
+  print(bcplot_mito)
+  print(bcplot_caller)
+  
+  sce <- sce[,which(sce$calledcell)]
+  calledcells <- sce@colData$Barcode
+
 }else if(mattype=="biorad"){ #THIS IS FOR BIORAD/DENSE COUNT TABLE INPUT
   counts.table <- read.delim(matrix, stringsAsFactors = F, header = TRUE, sep=",", row.names=1)
   counts.matrix <- t(as.matrix(counts.table))
@@ -175,6 +230,10 @@ if(mattype=="cellranger"){
                          min.genes = 0, 
                          min.cells=ifelse(round(0.001*ncol(sce))!=0,round(0.001*ncol(sce)),1), 
                          project=projectId)
+}else if(mattype=="zumi"){
+  so <- CreateSeuratObject(raw.data = umicounts, min.genes = 0,
+                           min.cells=ifelse(round(0.001*ncol(sce))!=0,round(0.001*ncol(sce)),1),
+                           project=projectId)
 }else if(mattype=="biorad"){
   so <- CreateSeuratObject(raw.data = counts.matrix, 
                            min.genes = 0, 
@@ -288,7 +347,7 @@ if(doCycleRegress){
       pairs <- readRDS(system.file("exdata", "mouse_cycle_markers.rds", package="scran"))
     }
     sce_filtered_temp <- sce_filtered
-    if(mattype=="biorad"){
+    if(mattype=="biorad"|mattype=="zumi"){
       #BIORAD/COUNTS MATRICIES TYPICALL USE ENSEMBL IDs
       #This step is to convert the ensembl IDs to symbols
       if(grepl("hg",species)){
@@ -297,8 +356,9 @@ if(doCycleRegress){
       if(grepl("mm",species)){
         annotation <- org.Mm.eg.db
       }
-      genes <- rownames(sce_filtered_temp)
-      g2e <- AnnotationDbi::select(annotation,genes,"ENSEMBL","SYMBOL")
+      genes <- gsub("\\..*","",rownames(sce_filtered_temp))
+      g2e <- AnnotationDbi::select(x=annotation,
+                                   keys=genes,keytype="ENSEMBL",column="SYMBOL")
       #Hack to deal with many-to-one situations in annotation mapping
       g2e <- g2e[!duplicated(g2e$ENSEMBL),]
       g2e$ENSEMBL[is.na(g2e$ENSEMBL)] <- g2e$SYMBOL[is.na(g2e$ENSEMBL)]
