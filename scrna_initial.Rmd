@@ -65,9 +65,11 @@ library(ggplot2)
 
 #READS IN COUNTS MATRIX AS SINGLE CELL EXPRESSION SET OBJECT
 #THIS IS NEEDED FOR ANALYSIS IN SCATER
+calling.cells=FALSE
 if(mattype=="cellranger"){
   sce <- read10xCounts(matrix)
 }else if(mattype=="cellranger_raw"){
+  calling.cells=TRUE
   sce <- read10xCounts(matrix)
   is.mito <- grepl("^MT-",rowData(sce)@listData$Symbol)|
     grepl("^mt-",rowData(sce)@listData$Symbol)|
@@ -120,8 +122,9 @@ if(mattype=="cellranger"){
 	    as.vector(x = as.character(x = sapply(X = calledcells, FUN = ExtractField, field = 1, delim = "-")))
   }
 }else if(mattype=="zumi"){
+  calling.cells=TRUE
   zumi.output <- readRDS(matrix)
-  umicounts <- zumi.output$intron.exon$umicounts
+  umicounts <- zumi.output$exons$umicounts
   sce <- SingleCellExperiment(list(counts=umicounts))
   isSpike(sce, "MySpike") <- grep("^ERCC", rownames(sce))
   sce@colData$Barcode <- colnames(sce)
@@ -244,8 +247,7 @@ if(mattype=="cellranger"){
 # so@raw.data <- so@data
 # so <- Setup(so, min.genes=0, min.cells=round(0.001*ncol(sce)), do.logNormalize=T, do.scale=F, do.center=F, total.expr=1e4, project=projectId, save.raw=F)
 ```
-
-### **There are** `r length(calledcells)` **called cells in this sample.**
+`r if(calling.cells){paste0(" \nThere are **",length(calledcells),"** called cells in this sample.\n")}`
 
 ### **nGenes vs nUMI** (Pre-Filter)
 
@@ -347,22 +349,25 @@ if(doCycleRegress){
       pairs <- readRDS(system.file("exdata", "mouse_cycle_markers.rds", package="scran"))
     }
     sce_filtered_temp <- sce_filtered
-    if(mattype=="biorad"|mattype=="zumi"){
-      #BIORAD/COUNTS MATRICIES TYPICALL USE ENSEMBL IDs
-      #This step is to convert the ensembl IDs to symbols
+    if(mattype=="biorad"){
+      #BIORAD/COUNTS MATRICIES TYPICALLY USE SYMBOLS
+      #This step is to convert to ENSEMBL IDs for cyclone
       if(grepl("hg",species)){
         annotation <- org.Hs.eg.db
       }
       if(grepl("mm",species)){
         annotation <- org.Mm.eg.db
       }
-      genes <- gsub("\\..*","",rownames(sce_filtered_temp))
       g2e <- AnnotationDbi::select(x=annotation,
-                                   keys=genes,keytype="ENSEMBL",column="SYMBOL")
+                                   keys=genes,column="ENSEMBL",keytype="SYMBOL")
       #Hack to deal with many-to-one situations in annotation mapping
       g2e <- g2e[!duplicated(g2e$ENSEMBL),]
       g2e$ENSEMBL[is.na(g2e$ENSEMBL)] <- g2e$SYMBOL[is.na(g2e$ENSEMBL)]
       rownames(sce_filtered_temp)<-g2e$ENSEMBL
+    }
+    if(mattype=="zumi"){
+      #remove the version number from ENSEMBL ID in the case of Zumi data
+      rownames(sce_filtered_temp) <- gsub("\\..*","",rownames(sce_filtered_temp))
     }
     assignments <- cyclone(sce_filtered_temp, pairs, gene.names=rownames(sce_filtered_temp))
     plot(assignments$score$G1, assignments$score$G2M, xlab="G1 score", ylab="G2/M score", pch=16, 
