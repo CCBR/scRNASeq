@@ -340,22 +340,24 @@ plot(density(sce$pct_counts_Mt),col="red", xlab="Mitochondrial proportion (%)", 
 ```{r cell_cycle, echo=FALSE,warning=FALSE,message=FALSE}
 #Cell cycle phase assignment is done only if appropriate paramter is set
 #Uses Cyclone to do assignment
+isHuman = grepl("hg",tolower(species))|grepl("grch",tolower(species))
+isMouse = grepl("mm",tolower(species))|grepl("grcm",tolower(species))
 if(doCycleRegress){
-  if(grepl("hg",species)|grepl("mm",species)){
-    if(grepl("hg",species)){
+  if(isHuman|isMouse){
+    if(isHuman){
       pairs <- readRDS(system.file("exdata", "human_cycle_markers.rds", package="scran"))
     }
-    if(grepl("mm",species)){
+    if(isMouse){
       pairs <- readRDS(system.file("exdata", "mouse_cycle_markers.rds", package="scran"))
     }
     sce_filtered_temp <- sce_filtered
     if(mattype=="biorad"){
       #BIORAD/COUNTS MATRICIES TYPICALLY USE SYMBOLS
       #This step is to convert to ENSEMBL IDs for cyclone
-      if(grepl("hg",species)){
+      if(isHuman){
         annotation <- org.Hs.eg.db
       }
-      if(grepl("mm",species)){
+      if(isMouse){
         annotation <- org.Mm.eg.db
       }
       g2e <- AnnotationDbi::select(x=annotation,
@@ -572,31 +574,32 @@ PCElbowPlot(so)
 ```
 
 ```{r Seurat_save_rds, echo=FALSE,warning=FALSE,message=FALSE}
-gdata::keep(so, params, species, projectId, sure=TRUE) ## memory optimizations
+gdata::keep(so, params, species, projectId, isHuman, isMouse, sure=TRUE) ## memory optimizations
 saveRDS(so, paste0(projectId,"_initial_seurat_object.rds")) ## output SO
 exprs <- as.matrix(so@scale.data) ## only need expression matrix for next step, use scaled values
-gdata::keep(exprs, params, species, sure=TRUE)
+gdata::keep(exprs, params, species, isHuman, isMouse, sure=TRUE)
 ```
 
-### **GSVA Heatmap**
+### **GSVA Heatmap - under maintenance**
 
 ```{r gsva_heatmap, echo=FALSE,warning=FALSE,message=FALSE,results='hide',fig.keep='all',fig.height=10}
 #THIS CAN ONLY BE RUN ON HELIX/BIOWULF (references msigdb files)
 #If running locally, please point to different gmt files or remove this chunk
-if(grepl("hg",species)|grepl("mm",species)){
-  eset <- ExpressionSet(assayData=exprs)
-  eset_filtered <- varFilter(eset,var.func=IQR, var.cutoff=0.5, filterByQuantile=TRUE)
-  if(grepl("hg",species)){
-    gsets <- getGmt("/data/CCBR_Pipeliner/db/PipeDB/MSigDB/c2.cp.kegg.v6.0.symbols.gmt")
-  }
-  if(grepl("mm",species)){
-    gsets <- getGmt("/data/CCBR_Pipeliner/db/PipeDB/MSigDB/c2.cp.kegg.v6.0.symbols_mouse.gmt")
-  }
-  scores <- gsva(exprs(eset_filtered),gsets,min.sz=5,max.sz=500,verbose=TRUE)
-  myscores <- scores$es.obs[unlist(lapply(rownames(scores$es.obs),function(x){grepl("^REACTOME_",x)|grepl("^KEGG_",x)|grepl("^BIOCARTA_",x)})),]
-  top <- myscores[names(head(rev(sort((rowSds(myscores)))),50)),]
-  heatmap.2(top,trace="none",labRow=NULL,margins=c(1,20),cexRow=0.7)
-}
+
+# if(isHuman|isMouse){
+#   eset <- ExpressionSet(assayData=exprs)
+#   eset_filtered <- varFilter(eset,var.func=IQR, var.cutoff=0.5, filterByQuantile=TRUE)
+#   if(isHuman){
+#     gsets <- getGmt("/data/CCBR_Pipeliner/db/PipeDB/MSigDB/c2.cp.kegg.v6.0.symbols.gmt")
+#   }
+#   if(isMouse){
+#     gsets <- getGmt("/data/CCBR_Pipeliner/db/PipeDB/MSigDB/c2.cp.kegg.v6.0.symbols_mouse.gmt")
+#   }
+#   scores <- gsva(exprs(eset_filtered),gsets,min.sz=5,max.sz=500,verbose=TRUE)
+#   myscores <- scores$es.obs[unlist(lapply(rownames(scores$es.obs),function(x){grepl("^REACTOME_",x)|grepl("^KEGG_",x)|grepl("^BIOCARTA_",x)})),]
+#   top <- myscores[names(head(rev(sort((rowSds(myscores)))),50)),]
+#   heatmap.2(top,trace="none",labRow=NULL,margins=c(1,20),cexRow=0.7)
+# }
 
 #ignore this, just remnants of some stuff I was testing out:
 #pc1.scores <- gsva(pc1.exprs,gsets,min.sz=2,verbose=TRUE)
