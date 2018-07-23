@@ -580,7 +580,7 @@ exprs <- as.matrix(so@scale.data) ## only need expression matrix for next step, 
 gdata::keep(exprs, params, species, isHuman, isMouse, sure=TRUE)
 ```
 
-### **GSVA Heatmap - under maintenance**
+### **GSVA Heatmap - turned off for now**
 
 ```{r gsva_heatmap, echo=FALSE,warning=FALSE,message=FALSE,results='hide',fig.keep='all',fig.height=10}
 #THIS CAN ONLY BE RUN ON HELIX/BIOWULF (references msigdb files)
@@ -595,8 +595,8 @@ gdata::keep(exprs, params, species, isHuman, isMouse, sure=TRUE)
 #   if(isMouse){
 #     gsets <- getGmt("/data/CCBR_Pipeliner/db/PipeDB/MSigDB/c2.cp.kegg.v6.0.symbols_mouse.gmt")
 #   }
-#   scores <- gsva(exprs(eset_filtered),gsets,min.sz=5,max.sz=500,verbose=TRUE)
-#   myscores <- scores$es.obs[unlist(lapply(rownames(scores$es.obs),function(x){grepl("^REACTOME_",x)|grepl("^KEGG_",x)|grepl("^BIOCARTA_",x)})),]
+#   scores <- gsva(exprs(eset_filtered),gsets,min.sz=5,max.sz=500,verbose=TRUE,parallel.sz=1)
+#   myscores <- scores[unlist(lapply(rownames(scores),function(x){grepl("^REACTOME_",x)|grepl("^KEGG_",x)|grepl("^BIOCARTA_",x)})),]
 #   top <- myscores[names(head(rev(sort((rowSds(myscores)))),50)),]
 #   heatmap.2(top,trace="none",labRow=NULL,margins=c(1,20),cexRow=0.7)
 # }

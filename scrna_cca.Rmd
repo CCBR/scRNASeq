@@ -103,7 +103,7 @@ VlnPlot(object = so_combined, features.plot = "CC2", group.by = "sample")
 ```{r Seurat_bicor, echo=FALSE,warning=FALSE,message=FALSE,results='hide',fig.keep='all'}
 #Similar to an elbow plot, for CC selection
 mbp <- MetageneBicorPlot(so_combined, grouping.var = "sample", dims.eval = 1:30, display.progress = TRUE)
-saveRDS(so_combined,paste0(projectId,"_combined_cca_seurat_object.Rds"))
+saveRDS(so_combined,paste0(projectId,"_combined_cca_seurat_object.rds"))
 ```
 
 ### **CC Heatmaps**

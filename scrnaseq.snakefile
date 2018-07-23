@@ -41,7 +41,13 @@ elif config['project']['pipeline'] == "scrnaseqinit":
 elif config['project']['pipeline'] == "scrnaseqcluster":
   rule all:
      params: batch='--time=168:00:00'
-     input: expand(join(workpath,subdir,"{pid}.{name}_scrna_cluster_{pcs}_{resolution}.html".format(pcs=config['project']['PCS'],resolution=config['project']['RESOLUTION'],pid=pid)),name=samples)
+     input: expand(join(workpath,subdir,"{name}/","{pid}.{name}_scrna_cluster_{pcs}_{resolution}.html"),pcs=config['project']['PCS'],resolution=config['project']['RESOLUTION'],pid=pid,name=samples)
+
+elif config['project']['pipeline'] == "scrnaseqmulticluster":
+  rule all:
+     params: batch='--time=168:00:00'
+     input: expand(join(workpath,subdir,"combined_cca/","{pid}_scrna_multicluster_{pcs}_{resolution}.html".format(pcs=config['project']['PCS'],resolution=config['project']['RESOLUTION'],pid=pid)))
+
 
 rule cellranger: 
    params: rname='pl:cellranger',batch='--cpus-per-task=40 --mem=110g --time=48:00:00',crid=config['project']['CRID'],refer=config['project']['annotation'],datapath=config['project']['datapath'],dir=config['project']['workpath'],expected=config['project']['EXPECTED'],projectId=config['project']['id']
@@ -99,16 +105,24 @@ rule scrna_jackstraw:
 
 rule scrna_cluster: 
    params: rname='pl:scrnacluster',batch='--partition=largemem --cpus-per-task=32 --mem=1000g --time=48:00:00',dir=config['project']['workpath'],pcs=config['project']['PCS'],resolution=config['project']['RESOLUTION'],projDesc=config['project']['description'],projectId=config['project']['id'],sd=subdir
-   input: so=join(workpath,subdir,"{pid}.{name}_initial_seurat_object.rds")
+   input: so=join(workpath,subdir,"{name}/","{pid}.{name}_initial_seurat_object.rds")
    output:
-    out1=join(workpath,subdir,"{name}/","{pid}.{name}","_scrna_cluster_{pcs}_{resolution}.html".format(pcs=config['project']['PCS'],resolution=config['project']['RESOLUTION'])),
-    out2=join(workpath,subdir,"{name}/","{pid}.{name}","_cluster_seurat_object.rds")
+    out1=join(workpath,subdir,"{name}/","{pid}.{name}"+"_scrna_cluster_{pcs}_{resolution}.html".format(pcs=config['project']['PCS'],resolution=config['project']['RESOLUTION'])),
+    out2=join(workpath,subdir,"{name}/","{pid}.{name}"+"_cluster_seurat_object_{pcs}_{resolution}.rds".format(pcs=config['project']['PCS'],resolution=config['project']['RESOLUTION']))
    shell: "cp Scripts/scrna_cluster.Rmd {params.dir}/{params.sd}/{wildcards.name}/; module load R/3.5; Rscript Scripts/scrna_cluster_call.R '{params.dir}/{params.sd}/{wildcards.name}' '{input.so}' '{params.pcs}' '{params.resolution}' '{params.projectId}.{wildcards.name}' '{params.projDesc}'"
 
 rule scrna_cca: 
    params: rname='pl:scrnacca',batch='--partition=largemem --cpus-per-task=32 --mem=1000g --time=48:00:00',dir=config['project']['workpath'],projDesc=config['project']['description'],projectId=config['project']['id'],contrasts=" ".join(config['project']['contrasts']['rcontrasts']),sd=subdir
    input: all_so=expand(join(workpath,subdir,"{name}/","{pid}.{name}_initial_seurat_object.rds"),pid=pid,name=samples)
    output:
-    out1=join(workpath,subdir,"combined_cca/","{pid}_scrna_cca.html".format(pid=pid)),
-    out2=join(workpath,subdir,pid,"_combined_cca_seurat_object.rds")
+    out1=join(workpath,subdir,"combined_cca/","{pid}_scrna_cca.html"),
+    out2=join(workpath,subdir,"combined_cca/","{pid}_combined_cca_seurat_object.rds")
    shell: "mkdir -p {params.dir}/{params.sd}/combined_cca; cp Scripts/scrna_cca.Rmd {params.dir}/{params.sd}/combined_cca/; module load R/3.5; Rscript Scripts/scrna_cca_call.R '{params.dir}/{params.sd}/combined_cca' '{input.all_so}' '{params.contrasts}' '{params.projectId}' '{params.projDesc}'"
+
+rule scrna_multicluster: 
+   params: rname='pl:scrnamulticluster',batch='--partition=largemem --cpus-per-task=32 --mem=1000g --time=48:00:00',dir=config['project']['workpath'],pcs=config['project']['PCS'],resolution=config['project']['RESOLUTION'],projDesc=config['project']['description'],projectId=config['project']['id'],sd=subdir
+   input: so=join(workpath,subdir,"combined_cca/","{pid}_combined_cca_seurat_object.rds")
+   output:
+    out1=join(workpath,subdir,"combined_cca/","{pid}"+"_scrna_multicluster_{pcs}_{resolution}.html".format(pcs=config['project']['PCS'],resolution=config['project']['RESOLUTION'])),
+    out2=join(workpath,subdir,"combined_cca/","{pid}"+"_combined_cluster_seurat_object_{pcs}_{resolution}.rds".format(pcs=config['project']['PCS'],resolution=config['project']['RESOLUTION']))
+   shell: "cp Scripts/scrna_multicluster.Rmd {params.dir}/{params.sd}/combined_cca/; module load R/3.5; Rscript Scripts/scrna_multicluster_call.R '{params.dir}/{params.sd}/combined_cca' '{input.so}' '{params.pcs}' '{params.resolution}' '{params.projectId}' '{params.projDesc}'"

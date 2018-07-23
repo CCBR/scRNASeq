@@ -58,7 +58,7 @@ VlnPlot(object = so_combined, features.plot = "ACC2", group.by = "sample")
 #Reminder: Default resolution is around 0.6, lower res = less clusters
 so_combined <- FindClusters(so_combined, reduction.type = "cca.aligned", dims.use = 1:ccs, save.SNN = T, resolution = res, random.seed=1234567)
 so_combined <- RunTSNE(so_combined, reduction.use = "cca.aligned", dims.use = 1:ccs, do.fast = T)
-saveRDS(so_combined,paste0(projectId,"_combined_clustered_seurat_object_",ccs,"_",res,".Rds"))
+saveRDS(so_combined,paste0(projectId,"_combined_cluster_seurat_object_",ccs,"_",res,".rds"))
 
 TSNEPlot(so_combined, do.label = F, pt.size = 1, group.by = "sample")
 TSNEPlot(so_combined, do.label = T, pt.size = 1)
