@@ -427,7 +427,11 @@ so_temp <- ScaleData(object = so, vars.to.regress = c("nUMI", "percent.mito"))
 #Note: can set ScaleData to only regress and not scale if this is an issue
 # - via setting do.scale=F
 so_temp <- RunPCA(so_temp, pc.genes = so_temp@var.genes, do.print = FALSE)
-PCAPlot(so_temp, 1, 2, group.by="stage",cols.use=c(rgb(1, 0, 0, 0.7),rgb(0, 1, 0, 0.3),rgb(0, 0, 1, 0.7),rgb(0, 0, 0, 0.7)))
+if(doCycleRegress){
+  PCAPlot(so_temp, 1, 2, group.by="stage",cols.use=c(rgb(1, 0, 0, 0.7),rgb(0, 1, 0, 0.3),rgb(0, 0, 1, 0.7),rgb(0, 0, 0, 0.7)))
+}else{
+  PCAPlot(so_temp, 1, 2)
+}
 ```
 
 ### **PCA 1:2 After Regressing by G1/G2M Scores**
@@ -521,10 +525,12 @@ draw.PCA <- function(obj,colnum,m){
 }
 
 draw.PCA.clus(so,colnum=3,m = "orig.ident")
-draw.PCA.clus(so,colnum=3,m = "stage")
+if(doCycleRegress){
+  draw.PCA.clus(so,colnum=3,m = "stage")
+  draw.PCA(so,colnum=3,m = "G1.score")
+  draw.PCA(so,colnum=3,m = "G2M.score")
+}
 draw.PCA(so,colnum=3,m = "percent.mito")
-draw.PCA(so,colnum=3,m = "G1.score")
-draw.PCA(so,colnum=3,m = "G2M.score")
 draw.PCA(so,colnum=3,m = "nGene")
 draw.PCA(so,colnum=3,m = "nUMI")
 
